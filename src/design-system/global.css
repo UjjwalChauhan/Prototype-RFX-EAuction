@@ -1,0 +1,145 @@
+:root { color-scheme: light; }
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: #F7F8FA;
+  color: #111827;
+  font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  font-size: 14px;
+}
+
+a { color: #2563EB; text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+button { font-family: inherit; }
+input, select, textarea { font-family: inherit; }
+
+@keyframes rfx-spin { to { transform: rotate(360deg); } }
+@keyframes rfx-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+@keyframes rfx-shimmer { 0% { background-position: -400px 0; } 100% { background-position: 400px 0; } }
+@keyframes rfx-flash {
+  0% { background: #DCFCE7; }
+  100% { background: transparent; }
+}
+
+.rfx-skeleton {
+  background: #EEF0F3;
+  background-image: linear-gradient(90deg, #EEF0F3 0, #F6F7F9 120px, #EEF0F3 240px);
+  background-size: 640px 100%;
+  border-radius: 5px;
+  animation: rfx-shimmer 1.3s linear infinite;
+}
+
+.rfx-navrow:hover { background: #F4F5F7 !important; }
+.rfx-row:hover { background: #FAFBFC; }
+.rfx-flash { animation: rfx-flash 1.4s ease-out; }
+
+/* Wide content scrolls inside its own container; the page never scrolls sideways.
+   `position: relative` matters: without it an absolutely positioned descendant
+   (a visually-hidden label, say) is laid out against the viewport instead, escapes
+   the scroller and widens the whole page. */
+.rfx-scroll-x { overflow-x: auto; position: relative; }
+
+/* Focus is always visible — keyboard users are first-class. */
+:focus-visible {
+  outline: 2px solid #2563EB;
+  outline-offset: 2px;
+}
+
+.rfx-sr-only {
+  position: absolute;
+  left: 0; top: 0;
+  width: 1px; height: 1px;
+  padding: 0; margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap; border: 0;
+}
+
+/* ---------------------------------------------------------------------------
+   Layout — no section may ever paint over another.
+
+   A grid item's default `min-width: auto` lets it grow past its own track when
+   its content has a wide minimum (a wide table, a long identifier). The item
+   then bleeds sideways into the neighbouring column, and whichever sibling
+   comes later in the DOM paints on top of it. Every layout container below
+   pins its children to `min-width: 0`, so the item is sized by its track and
+   the wide content scrolls inside its own scroller instead.
+
+   Columns also collapse to a single stack before they get too narrow to hold
+   their content, rather than being squeezed until something has to give.
+--------------------------------------------------------------------------- */
+
+.rfx-split,
+.rfx-side,
+.rfx-nav,
+.rfx-triple,
+.rfx-stack {
+  display: grid;
+  align-items: start;
+  gap: 14px;
+}
+
+.rfx-split > *,
+.rfx-side > *,
+.rfx-nav > *,
+.rfx-triple > *,
+.rfx-stack > * { min-width: 0; }
+
+/* Single column — the collapsed form of every layout above, and the wrapper
+   every stack of cards uses. `minmax(0, 1fr)` is what makes it safe: an `auto`
+   track cannot shrink below its widest child's minimum, so one wide table would
+   otherwise push the whole stack past the column it sits in. Callers set their
+   own `gap`. */
+.rfx-stack { grid-template-columns: minmax(0, 1fr); gap: 0; }
+
+/* Work surface + proportional right rail. */
+.rfx-split  { grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); }
+/* Work surface + fixed right rail. */
+.rfx-side   { grid-template-columns: minmax(0, 1fr) 320px; }
+/* Left nav + work surface. */
+.rfx-nav    { grid-template-columns: 215px minmax(0, 1fr); }
+/* Left nav + work surface + right rail. */
+.rfx-triple { grid-template-columns: 200px minmax(0, 1fr) 280px; gap: 12px; }
+
+/* Three columns need the most room, so they give up the rail first. */
+@media (max-width: 1480px) {
+  .rfx-triple { grid-template-columns: 200px minmax(0, 1fr); }
+  .rfx-triple > :nth-child(3) { grid-column: 1 / -1; }
+}
+
+/* Below this the rail can no longer sit beside the work surface. */
+@media (max-width: 1280px) {
+  .rfx-split,
+  .rfx-side,
+  .rfx-triple { grid-template-columns: minmax(0, 1fr); }
+  .rfx-triple > :nth-child(3) { grid-column: auto; }
+}
+
+@media (max-width: 920px) {
+  .rfx-nav,
+  .rfx-triple { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* Long unbroken tokens — ids, emails, file names — wrap rather than bleed out. */
+body { overflow-wrap: break-word; }
+
+/* A scroller must be allowed to shrink, or it never scrolls. */
+.rfx-scroll-x { min-width: 0; max-width: 100%; }
+
+/* Label / value rows. The value column may shrink; a long value wraps in place
+   rather than pushing the row wider than its card. */
+.rfx-defrow,
+.rfx-defrow-wide { display: grid; gap: 10px; }
+.rfx-defrow > *,
+.rfx-defrow-wide > * { min-width: 0; }
+.rfx-defrow      { grid-template-columns: minmax(0, 150px) minmax(0, 1fr); }
+.rfx-defrow-wide { grid-template-columns: minmax(0, 180px) minmax(0, 1fr); gap: 12px; }
+
+@media (max-width: 620px) {
+  .rfx-defrow,
+  .rfx-defrow-wide { grid-template-columns: minmax(0, 1fr); gap: 2px; }
+}
