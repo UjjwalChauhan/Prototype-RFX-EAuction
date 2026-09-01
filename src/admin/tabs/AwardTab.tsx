@@ -12,13 +12,16 @@ import {
 import { Card, Empty, Table, type Column } from '../../design-system/components/layout';
 import { AgentCard, Modal, ValidationBanner } from '../../design-system/components/domain';
 import { buyerView } from '../../server/auctionService';
-import { buildApprovalSteps, separationOfDutiesBreach, simulate } from '../../domain/doa';
+import { separationOfDutiesBreach, simulate } from '../../domain/doa';
+import { chainSignature, isPostAward, snapshotChain, submitRevision } from '../../domain/nfaLifecycle';
 import { computeSavingsLine, totalSavings, BASELINE_LABELS } from '../../domain/savings';
 import { JOURNEY_PATTERNS } from '../../domain/journeyPatterns';
-import { biddersForEvent, lotsForEvent, useStore } from '../../store/store';
+import { biddersForEvent, contractsForEvent, lotsForEvent, useStore } from '../../store/store';
 import { COUNTERPARTY_NAMES, DOA_RULES, LINE_ITEMS } from '../../data/seed';
 import { forbiddenReason } from '../../domain/agents';
-import type { AwardScenarioKind, Nfa, SavingsLine } from '../../domain/types';
+import { ScopeChangePanel } from '../nfa/ScopeChangePanel';
+import { UNQUOTED_ITEM } from '../../data/nfaScenarios';
+import type { AwardScenarioKind, Nfa, NfaDocument, SavingsLine } from '../../domain/types';
 
 interface Allocation {
   lotId: string;
@@ -43,6 +46,8 @@ export function AwardTab({ eventId, onGoTab }: { eventId: string; onGoTab: (tab:
   const [submitOpen, setSubmitOpen] = React.useState(false);
   const [maxSharePct, setMaxSharePct] = React.useState(100);
   const [dualSource, setDualSource] = React.useState(false);
+  // Pack 28 D7 — the same blocked-action panel, reached from the scenario grid.
+  const [scopeChangeOpen, setScopeChangeOpen] = React.useState(false);
 
   const ranked = state.auction.auction.eventId === eventId
     ? buyerView(state.auction, 'al-1', COUNTERPARTY_NAMES).filter((r) => r.bidCount > 0)
@@ -134,22 +139,78 @@ export function AwardTab({ eventId, onGoTab }: { eventId: string; onGoTab: (tab:
 
   const separation = nfa ? separationOfDutiesBreach(state.currentUser.id, nfa.steps) : { breach: false, message: null };
 
+  const riskStatement =
+    'AG-08 records no statutory or compliance blocker. One counterparty in the field is provisional; '
+    + 'supply continuity risk is rated low given two qualified alternates.';
+
+  /**
+   * The document a revision freezes. Pack 22 renders the twelve sections; this
+   * is the diffable content behind them, and Pack 28 compares revisions of it.
+   */
+  const buildDocument = (): NfaDocument => ({
+    scenarioId: scenario,
+    currency: event.currency,
+    allocations: allocations.map((a, i) => ({
+      lineId: `al-${i + 1}`,
+      lotId: a.lotId,
+      lotName: a.lotName,
+      bidderId: a.bidderId,
+      bidderName: a.bidderName,
+      sharePct: a.sharePct,
+      quantity: Math.round(LINE_ITEMS.reduce((sum, l) => sum + l.quantity, 0) * (a.sharePct / 100)),
+      value: a.value,
+      bidId: a.bidId,
+    })),
+    totalValue,
+    comparisonSheetVersion: 3,
+    rankOverride: isOverride,
+    overrideReason: isOverride ? overrideReason : null,
+    deviations,
+    chainSignature: chainSignature(doa.chain),
+    recommendation,
+    riskStatement,
+    processSummary: `Pattern followed: ${pattern.id} · ${pattern.name}. Stages executed: ${event.stagesEnabled.join(' → ')}.`,
+    competitionSummary: `${bidders.length} invited · ${bidders.filter((b) => b.invitationStatus === 'ACCEPTED').length} accepted · ${ranked.length} placed a valid bid.`,
+    costCentre: event.costCentre,
+    requiredByDate: null,
+    paymentTerms: 'Net 45',
+  });
+
   const submitNfa = () => {
-    const created: Nfa = {
-      id: `nfa-${Date.now()}`,
+    const id = `nfa-${Date.now()}`;
+    const document = buildDocument();
+    // The note is created empty and revision 1 is *submitted* onto it, so the
+    // first submission goes through exactly the path every later one does.
+    const empty: Nfa = {
+      id,
       eventId,
       scenarioId: scenario,
-      comparisonSheetVersion: 3,
+      comparisonSheetVersion: document.comparisonSheetVersion,
       recommendation,
       recommendedBy: state.currentUser.id,
       deviations,
-      riskStatement:
-        'AG-08 records no statutory or compliance blocker. One counterparty in the field is provisional; supply continuity risk is rated low given two qualified alternates.',
+      riskStatement,
       doaUpliftApplied: doa.upliftApplied,
       overrideReason: isOverride ? overrideReason : null,
-      steps: buildApprovalSteps(`nfa-${Date.now()}`, doa.chain),
+      steps: [],
       createdAt: Date.now(),
+      status: 'IN_APPROVAL',
+      revisions: [],
+      draft: document,
+      rejectionReason: null,
+      recallReason: null,
+      supersededByNfaId: null,
+      predecessorNfaId: null,
     };
+    const { nfa: created } = submitRevision({
+      nfa: empty,
+      document,
+      chain: snapshotChain(doa, Date.now()),
+      actorId: state.currentUser.id,
+      actorName: state.currentUser.name,
+      at: Date.now(),
+      settings: state.nfaOptions,
+    });
     dispatch({ type: 'ADD_NFA', nfa: created });
     dispatch({ type: 'UPDATE_EVENT', eventId, patch: { status: 'PENDING_AWARD_APPROVAL', currentStage: 'APPROVAL' } });
     setSubmitOpen(false);
@@ -199,6 +260,16 @@ export function AwardTab({ eventId, onGoTab }: { eventId: string; onGoTab: (tab:
         <Card
           title="Award scenarios"
           hint="Compare allocations before committing. The auction result is a recommendation, not an award."
+          action={
+            /* Once the event is at Award Recommended or later, a line can no
+               longer simply join the award. The control stays visible and opens
+               an explanation rather than disappearing or failing silently. */
+            isPostAward(event.status) ? (
+              <Button size="small" variant="secondary" onClick={() => setScopeChangeOpen(true)}>
+                Add a line to this award
+              </Button>
+            ) : undefined
+          }
         >
           <Segmented
             value={scenario}
@@ -519,6 +590,24 @@ export function AwardTab({ eventId, onGoTab }: { eventId: string; onGoTab: (tab:
           ]}
         />
       </div>
+
+      <ScopeChangePanel
+        open={scopeChangeOpen}
+        onClose={() => setScopeChangeOpen(false)}
+        settings={state.nfaOptions}
+        onSettingsChange={(patch) => dispatch({ type: 'SET_NFA_OPTION', patch })}
+        onRoute={() => setScopeChangeOpen(false)}
+        context={{
+          kind: 'ADD_LINE',
+          eventStatus: event.status,
+          origin: 'AWARD_SCENARIOS',
+          itemDescription: UNQUOTED_ITEM.description,
+          itemCategory: UNQUOTED_ITEM.category,
+          itemValue: UNQUOTED_ITEM.estimatedValue,
+          currency: event.currency,
+          contract: contractsForEvent(state, eventId)[0] ?? null,
+        }}
+      />
 
       <Modal
         open={submitOpen}

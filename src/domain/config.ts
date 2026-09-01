@@ -51,8 +51,15 @@ export function resolve<T>(
 
   for (const scope of SCOPE_ORDER) {
     const scopeId = scopeIdFor(scope, lineage);
+    // A null id means this scope does not apply to the lineage being resolved.
+    // Resolving *at* tenant scope must not pick up a category's override, or
+    // the studio would report a value the tenant does not actually have.
+    if (scopeId === null) {
+      chain.push({ scopeType: scope, value: undefined, isLocked: false });
+      continue;
+    }
     const setting = settings.find(
-      (s) => s.key === key && s.scopeType === scope && (scopeId === null || s.scopeId === scopeId),
+      (s) => s.key === key && s.scopeType === scope && s.scopeId === scopeId,
     );
     chain.push({
       scopeType: scope,
@@ -77,6 +84,40 @@ export function resolve<T>(
     lockedBy,
     chain,
   };
+}
+
+/**
+ * Some configuration is a *collection*, not a scalar: a custom journey authored
+ * at tenant scope should still be available to a category, not be replaced by
+ * whatever the category happens to define. Those accumulate down the chain
+ * instead of overriding, and each item keeps the scope that authored it so the
+ * studio can say where it came from and who may edit it.
+ */
+export interface AccumulatedConfig<T> {
+  key: string;
+  items: T[];
+  byScope: { scopeType: ConfigScopeType; items: T[]; isLocked: boolean }[];
+}
+
+export function resolveAccumulated<T>(
+  key: string,
+  settings: ConfigSetting[],
+  lineage: ScopeLineage,
+): AccumulatedConfig<T> {
+  const byScope: AccumulatedConfig<T>['byScope'] = [];
+  const items: T[] = [];
+
+  for (const scope of SCOPE_ORDER) {
+    const scopeId = scopeIdFor(scope, lineage);
+    const setting = scopeId === null
+      ? undefined
+      : settings.find((s) => s.key === key && s.scopeType === scope && s.scopeId === scopeId);
+    const scopeItems = Array.isArray(setting?.value) ? (setting.value as T[]) : [];
+    byScope.push({ scopeType: scope, items: scopeItems, isLocked: setting?.isLocked ?? false });
+    items.push(...scopeItems);
+  }
+
+  return { key, items, byScope };
 }
 
 /** The fourteen configuration domains, for the studio's left rail. */

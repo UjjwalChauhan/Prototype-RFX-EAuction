@@ -8,13 +8,17 @@
  */
 import React from 'react';
 import type {
-  Clarification, ConfigSetting, EventBidder, Id, Lot, NegotiationRound, Nfa, Response,
-  Score, SourcingEvent, User,
+  Clarification, ConfigSetting, EventBidder, Id, Lot, NegotiationRound, Nfa,
+  PurchaseRequest, PurchaseRequestLine, RateContract, Response, Score,
+  SourcingEvent, SourcingRequisition, User,
 } from '../domain/types';
+import { DEFAULT_OPEN_DECISIONS, type OpenDecisionSettings } from '../domain/nfaLifecycle';
 import {
   type AuctionState, controllerAction, submitBid, type ControllerAction,
 } from '../server/auctionService';
 import * as seed from '../data/seed';
+import { PURCHASE_REQUESTS, PURCHASE_REQUEST_LINES } from '../data/purchaseRequests';
+import { RATE_CONTRACTS } from '../data/nfaScenarios';
 
 export type Surface = 'ADMIN' | 'PORTAL';
 
@@ -36,6 +40,20 @@ export interface AppState {
   negotiationRounds: NegotiationRound[];
   configSettings: ConfigSetting[];
   nfas: Nfa[];
+  /**
+   * The nine open decisions of PRD §B14.8, held in state rather than picked.
+   * Every screen that changes under one of them reads it from here, so the
+   * client can settle the register by flipping a switch and looking.
+   */
+  nfaOptions: OpenDecisionSettings;
+  /** Rate contracts an award established — the call-off destination. */
+  rateContracts: RateContract[];
+
+  /** Requisitions live in the store because sourcing mutates their lines. */
+  purchaseRequests: PurchaseRequest[];
+  purchaseRequestLines: PurchaseRequestLine[];
+  /** Consolidated demands (PRD), each mapping an event back to many RQ lines. */
+  sourcingRequisitions: SourcingRequisition[];
 
   auction: AuctionState;
 
@@ -68,7 +86,14 @@ export type Action =
   | { type: 'UPDATE_LOT'; lotId: Id; patch: Partial<Lot> }
   | { type: 'OPEN_LOT'; auctionLotId: Id }
   | { type: 'UPDATE_EVENT'; eventId: Id; patch: Partial<SourcingEvent> }
-  | { type: 'CREATE_EVENT'; event: SourcingEvent; lots: Lot[] }
+  | {
+      type: 'CREATE_EVENT'; event: SourcingEvent; lots: Lot[];
+      /** Requisition lines this event was raised for — marked as out in it. */
+      sourcedLineIds?: Id[];
+      /** The consolidated demand the event was raised against. */
+      sourcingRequisitionId?: Id;
+    }
+  | { type: 'CREATE_SOURCING_REQUISITION'; requisition: SourcingRequisition }
   | { type: 'UPDATE_BIDDER'; bidderId: Id; patch: Partial<EventBidder> }
   | { type: 'ADD_SCORE'; score: Score }
   | { type: 'ANSWER_CLARIFICATION'; id: Id; answer: string; visibility: Clarification['visibility']; userId: Id }
@@ -76,7 +101,17 @@ export type Action =
   | { type: 'ADD_NEGOTIATION_ROUND'; round: NegotiationRound }
   | { type: 'SET_CONFIG'; setting: ConfigSetting }
   | { type: 'ADD_NFA'; nfa: Nfa }
-  | { type: 'UPDATE_NFA'; nfaId: Id; patch: Partial<Nfa> };
+  | { type: 'UPDATE_NFA'; nfaId: Id; patch: Partial<Nfa> }
+  /**
+   * The lifecycle transitions are computed by pure functions in
+   * `domain/nfaLifecycle` and land here whole, so the reducer never holds a
+   * second opinion about materiality or the chain.
+   */
+  | { type: 'REPLACE_NFA'; nfa: Nfa }
+  /** Seeds a demo note with history, replacing any note on the same event. */
+  | { type: 'SET_EVENT_NFA'; eventId: Id; nfa: Nfa | null }
+  | { type: 'SET_NFA_OPTION'; patch: Partial<OpenDecisionSettings> }
+  | { type: 'UPDATE_CONTRACT'; contractId: Id; patch: Partial<RateContract> };
 
 export function initialState(): AppState {
   return {
@@ -95,6 +130,12 @@ export function initialState(): AppState {
     negotiationRounds: seed.NEGOTIATION_ROUNDS,
     configSettings: seed.CONFIG_SETTINGS,
     nfas: [],
+    nfaOptions: DEFAULT_OPEN_DECISIONS,
+    rateContracts: RATE_CONTRACTS,
+
+    purchaseRequests: PURCHASE_REQUESTS,
+    purchaseRequestLines: PURCHASE_REQUEST_LINES,
+    sourcingRequisitions: [],
 
     auction: {
       auction: seed.AUCTION,
@@ -221,12 +262,35 @@ export function reducer(state: AppState, action: Action): AppState {
         events: state.events.map((e) => (e.id === action.eventId ? { ...e, ...action.patch } : e)),
       };
 
-    case 'CREATE_EVENT':
+    case 'CREATE_SOURCING_REQUISITION':
+      return {
+        ...state,
+        sourcingRequisitions: [...state.sourcingRequisitions, action.requisition],
+      };
+
+    case 'CREATE_EVENT': {
+      // Publishing against a consolidated demand takes its lines out of the
+      // sourceable pool in the same transaction that creates the event, so a
+      // line can never be selected into a second basket.
+      const sourced = new Set(action.sourcedLineIds ?? []);
+      const purchaseRequestLines = sourced.size === 0
+        ? state.purchaseRequestLines
+        : state.purchaseRequestLines.map((line) =>
+            sourced.has(line.id)
+              ? { ...line, sourcingState: 'IN_EVENT' as const, eventNumber: action.event.eventNumber }
+              : line,
+          );
+
       return {
         ...state,
         events: [action.event, ...state.events],
         lots: [...state.lots, ...action.lots],
+        purchaseRequestLines,
+        sourcingRequisitions: state.sourcingRequisitions.map((r) =>
+          r.id === action.sourcingRequisitionId ? { ...r, eventId: action.event.id } : r,
+        ),
       };
+    }
 
     case 'UPDATE_BIDDER': {
       const bidders = state.bidders.map((b) =>
@@ -272,6 +336,30 @@ export function reducer(state: AppState, action: Action): AppState {
         ...state,
         nfas: state.nfas.map((n) => (n.id === action.nfaId ? { ...n, ...action.patch } : n)),
       };
+
+    case 'REPLACE_NFA':
+      return {
+        ...state,
+        nfas: state.nfas.some((n) => n.id === action.nfa.id)
+          ? state.nfas.map((n) => (n.id === action.nfa.id ? action.nfa : n))
+          : [...state.nfas, action.nfa],
+      };
+
+    case 'SET_EVENT_NFA': {
+      const others = state.nfas.filter((n) => n.eventId !== action.eventId);
+      return { ...state, nfas: action.nfa ? [...others, action.nfa] : others };
+    }
+
+    case 'SET_NFA_OPTION':
+      return { ...state, nfaOptions: { ...state.nfaOptions, ...action.patch } };
+
+    case 'UPDATE_CONTRACT':
+      return {
+        ...state,
+        rateContracts: state.rateContracts.map((c) =>
+          c.id === action.contractId ? { ...c, ...action.patch } : c,
+        ),
+      };
   }
 }
 
@@ -307,4 +395,30 @@ export function lotsForEvent(state: AppState, eventId: Id): Lot[] {
 
 export function biddersForEvent(state: AppState, eventId: Id): EventBidder[] {
   return state.bidders.filter((b) => b.eventId === eventId);
+}
+
+export function sourcingRequisition(
+  state: AppState, id: Id | undefined,
+): SourcingRequisition | undefined {
+  return id === undefined ? undefined : state.sourcingRequisitions.find((r) => r.id === id);
+}
+
+/** The requisition lines a consolidated demand was built from, in line order. */
+export function linesOfRequisition(
+  state: AppState, requisition: SourcingRequisition | undefined,
+): PurchaseRequestLine[] {
+  if (!requisition) return [];
+  const wanted = new Set(requisition.lineIds);
+  return state.purchaseRequestLines.filter((l) => wanted.has(l.id));
+}
+
+/** The note in flight on an event. One event carries at most one live note. */
+export function nfaForEvent(state: AppState, eventId: Id): Nfa | undefined {
+  return state.nfas.find((n) => n.eventId === eventId && n.supersededByNfaId === null)
+    ?? state.nfas.find((n) => n.eventId === eventId);
+}
+
+/** Rate contracts this event's award established. */
+export function contractsForEvent(state: AppState, eventId: Id): RateContract[] {
+  return state.rateContracts.filter((c) => c.eventId === eventId);
 }

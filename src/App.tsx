@@ -14,6 +14,7 @@ import { CreateEventWizard } from './admin/CreateEventWizard';
 import { useEventWorkspace } from './admin/EventWorkspace';
 import { ConfigurationStudio, DoaAndAgents } from './admin/ConfigurationStudio';
 import { ApprovalInbox, IntakeWorkbench, StageList } from './admin/IntakeAndLists';
+import { PurchaseRequests } from './admin/PurchaseRequests';
 import { PortalShell } from './portal/PortalShell';
 import { Card, Empty } from './design-system/components/layout';
 import { Button } from './design-system/components/primitives';
@@ -80,6 +81,11 @@ function AdminApp() {
       subtitle: 'Every event, at every stage, in one place.',
       body: <SourcingBoard onNavigate={setRoute} />,
     },
+    requests: {
+      title: 'Purchase Request',
+      subtitle: 'Requisitions and their lines. Open a request to see every item in it.',
+      body: <PurchaseRequests onNavigate={setRoute} />,
+    },
     intake: {
       title: 'Intake',
       subtitle: 'PR workbench — unsourced demand at requisition-line level.',
@@ -87,8 +93,15 @@ function AdminApp() {
     },
     create: {
       title: 'Create Event',
-      subtitle: 'The stepper reshapes to the journey pattern without losing what you have entered.',
-      body: <CreateEventWizard onNavigate={setRoute} />,
+      subtitle: route.name === 'create' && route.prdId
+        ? 'Raised against a consolidated demand — basics and lines are populated from the requisitions.'
+        : 'The stepper reshapes to the journey pattern without losing what you have entered.',
+      body: (
+        <CreateEventWizard
+          onNavigate={setRoute}
+          prdId={route.name === 'create' ? route.prdId : undefined}
+        />
+      ),
     },
     approvals: {
       title: 'Approval Requests',

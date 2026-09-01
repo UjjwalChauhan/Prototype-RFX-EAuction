@@ -143,3 +143,36 @@ body { overflow-wrap: break-word; }
   .rfx-defrow,
   .rfx-defrow-wide { grid-template-columns: minmax(0, 1fr); gap: 2px; }
 }
+
+/* ---------------------------------------------------------------------------
+   Pack 28 — the revision drawer and the diff.
+
+   The drawer opens at 880px on a desktop and at the full viewport width on a
+   phone, because an approver opening revision history at 375px is a state the
+   pack requires. Both grids collapse to a single column well before they get
+   too narrow to read: a side-by-side diff at 375px is two stacked panes, not
+   two unreadable ones.
+--------------------------------------------------------------------------- */
+
+.rfx-revision-split,
+.rfx-diff-grid {
+  display: grid;
+  align-items: start;
+  gap: 14px;
+}
+.rfx-revision-split > *,
+.rfx-diff-grid > * { min-width: 0; }
+
+.rfx-revision-split { grid-template-columns: minmax(0, 260px) minmax(0, 1fr); }
+.rfx-diff-grid      { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; }
+
+@media (max-width: 760px) {
+  .rfx-revision-split { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 560px) {
+  .rfx-diff-grid { grid-template-columns: minmax(0, 1fr); gap: 6px; }
+}
+
+/* A superseded decision is struck, never hidden. The rule travels with the
+   opacity so the strike survives a colour-blind or high-contrast rendering. */
+.rfx-superseded { text-decoration: line-through; opacity: .72; }

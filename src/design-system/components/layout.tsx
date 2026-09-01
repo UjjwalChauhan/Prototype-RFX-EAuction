@@ -200,10 +200,18 @@ export interface TableProps<T> {
   loadingRows?: number;
   /** Sticky left columns, for the line-item comparison grid. */
   stickyLeft?: number;
+  /**
+   * Renders a full-width panel beneath a row. A row is expanded only when
+   * `isExpanded` says so, so the table stays a controlled component and the
+   * caller owns which rows are open.
+   */
+  renderExpanded?: (row: T, index: number) => React.ReactNode;
+  isExpanded?: (row: T, index: number) => boolean;
 }
 
 export function Table<T>({
   columns, rows, rowKey, rowStyle, onRowClick, dense, empty, loading, loadingRows = 6,
+  renderExpanded, isExpanded,
 }: TableProps<T>) {
   const rowHeight = dense ? 34 : 44;
 
@@ -244,35 +252,49 @@ export function Table<T>({
           </tr>
         </thead>
         <tbody>
-          {rows.map((row, index) => (
-            <tr
-              key={rowKey(row, index)}
-              className="rfx-row"
-              onClick={onRowClick ? () => onRowClick(row) : undefined}
-              style={{
-                height: rowHeight,
-                cursor: onRowClick ? 'pointer' : 'default',
-                borderBottom: `1px solid ${color.border}`,
-                ...rowStyle?.(row, index),
-              }}
-            >
-              {columns.map((col) => (
-                <td
-                  key={col.key}
+          {rows.map((row, index) => {
+            const expanded = isExpanded?.(row, index) ?? false;
+            return (
+              <React.Fragment key={rowKey(row, index)}>
+                <tr
+                  className="rfx-row"
+                  onClick={onRowClick ? () => onRowClick(row) : undefined}
                   style={{
-                    padding: '8px 12px',
-                    textAlign: col.align ?? (col.numeric ? 'right' : 'left'),
-                    fontVariantNumeric: col.numeric ? 'tabular-nums' : undefined,
-                    fontFamily: col.numeric ? font.mono : undefined,
-                    color: color.textPrimary,
-                    verticalAlign: 'middle',
+                    height: rowHeight,
+                    cursor: onRowClick ? 'pointer' : 'default',
+                    // An expanded row owns the panel below it, so the border
+                    // belongs at the bottom of the panel rather than here.
+                    borderBottom: expanded ? 'none' : `1px solid ${color.border}`,
+                    background: expanded ? color.brandPrimarySoft : undefined,
+                    ...rowStyle?.(row, index),
                   }}
                 >
-                  {col.render(row, index)}
-                </td>
-              ))}
-            </tr>
-          ))}
+                  {columns.map((col) => (
+                    <td
+                      key={col.key}
+                      style={{
+                        padding: '8px 12px',
+                        textAlign: col.align ?? (col.numeric ? 'right' : 'left'),
+                        fontVariantNumeric: col.numeric ? 'tabular-nums' : undefined,
+                        fontFamily: col.numeric ? font.mono : undefined,
+                        color: color.textPrimary,
+                        verticalAlign: 'middle',
+                      }}
+                    >
+                      {col.render(row, index)}
+                    </td>
+                  ))}
+                </tr>
+                {expanded && renderExpanded && (
+                  <tr style={{ borderBottom: `1px solid ${color.border}` }}>
+                    <td colSpan={columns.length} style={{ padding: 0, background: color.surfacePage }}>
+                      {renderExpanded(row, index)}
+                    </td>
+                  </tr>
+                )}
+              </React.Fragment>
+            );
+          })}
         </tbody>
       </table>
     </div>

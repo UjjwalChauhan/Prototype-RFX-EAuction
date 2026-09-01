@@ -2,14 +2,23 @@
  * Integration over the real wiring: seed data → store reducer → auction service
  * → engine. The unit tests prove each rule; this proves they are actually
  * connected, and that the two surfaces share one set of rules.
+ *
+ * The second block does the same for the sourcing path: requisition lines →
+ * consolidated demand → event → lines taken out of the sourceable pool.
  */
 import { beforeEach, describe, expect, it } from 'vitest';
-import { initialState, reducer, type AppState } from '../../store/store';
+import {
+  initialState, linesOfRequisition, reducer, sourcingRequisition, type AppState,
+} from '../../store/store';
+import { buildSourcingRequisition, toConsolidatedLines } from '../sourcingRequisition';
+import { linesFor, sourceableLines } from '../purchaseRequests';
+import { JOURNEY_PATTERNS } from '../journeyPatterns';
 import { bidderView, buyerView } from '../../server/auctionService';
 import { resetServerClock, setServerOffset } from '../../server/clock';
 import { auditTrail } from '../../server/audit';
 import { rankLot } from '../auctionEngine';
 import { COUNTERPARTY_NAMES, PORTAL_BIDDER_ID } from '../../data/seed';
+import type { Lot, SourcingEvent } from '../types';
 
 const LOT = 'al-1';
 
@@ -372,5 +381,102 @@ describe('event lifecycle through the store', () => {
     const answered = state.clarifications.find((c) => c.id === 'clar-4')!;
     expect(answered.visibility).toBe('BROADCAST');
     expect(answered.answeredAt).not.toBeNull();
+  });
+});
+
+// -------------------------------------------------------------------------
+// Sourcing: requisition lines → consolidated demand → event
+// -------------------------------------------------------------------------
+
+describe('basket → PRD → event → lines marked', () => {
+  it('runs the whole flow and takes the lines out of the sourceable pool', () => {
+    let state = initialState();
+
+    // 1. Pick unsourced lines from TWO different requisitions, same category.
+    const a = sourceableLines(linesFor(state.purchaseRequestLines, 'pr-00033')).slice(0, 6);
+    const b = sourceableLines(linesFor(state.purchaseRequestLines, 'pr-00034')).slice(0, 4);
+    const basket = [...a, ...b];
+    expect(basket).toHaveLength(10);
+
+    // 2. Consolidate into a PRD.
+    const requisition = buildSourcingRequisition({
+      lines: basket, requests: state.purchaseRequests,
+      existing: state.sourcingRequisitions, userId: 'user-ar', now: 1_000,
+    });
+    expect(requisition.prdNumber).toBe('PRD-2026-0001');
+    expect(requisition.requestNumbers).toEqual(['RQ-TGRANL-00033', 'RQ-TGRANL-00034']);
+
+    state = reducer(state, { type: 'CREATE_SOURCING_REQUISITION', requisition });
+    expect(sourcingRequisition(state, requisition.id)?.prdNumber).toBe('PRD-2026-0001');
+    expect(linesOfRequisition(state, requisition)).toHaveLength(10);
+
+    // 3. The wizard turns it into event lines across lots, with traceability.
+    const consolidated = toConsolidatedLines(
+      linesOfRequisition(state, requisition), state.purchaseRequests,
+    );
+    expect(consolidated).toHaveLength(10);
+    expect(new Set(consolidated.map((l) => l.lotName)).size).toBeGreaterThan(1);
+    for (const l of consolidated) expect(l.sourcePrLineId).toBeTruthy();
+
+    // 4. Publish.
+    const pattern = JOURNEY_PATTERNS['JP-02'];
+    const event: SourcingEvent = {
+      id: 'evt-new', tenantId: 'tenant-udaan', eventNumber: 'RFQ-2026-9001',
+      title: 'Consolidated', description: '', side: 'BUY', templateId: null,
+      journeyPattern: 'JP-02', businessUnit: requisition.businessUnits[0],
+      category: requisition.category, project: null, costCentre: null,
+      currency: requisition.currency, estimatedValue: 0, ownerId: 'user-ar',
+      status: 'PUBLISHED', createdFrom: 'PR', sourceReference: requisition.prdNumber,
+      stagesEnabled: pattern.stages, currentStage: pattern.stages[0],
+      envelopeMode: 'TWO_ENVELOPE', vendorInputPoints: pattern.vendorInputPoints,
+      publishedAt: 1_000, closesAt: 2_000, awardedAt: null, parentEventId: null,
+      version: 1, configSnapshotAtPublish: null,
+    };
+    state = reducer(state, {
+      type: 'CREATE_EVENT', event, lots: [] as Lot[],
+      sourcedLineIds: consolidated.map((l) => l.sourcePrLineId),
+      sourcingRequisitionId: requisition.id,
+    });
+
+    // 5. Those exact lines are now out in the event and nothing else moved.
+    const moved = state.purchaseRequestLines.filter((l) => l.eventNumber === 'RFQ-2026-9001');
+    expect(moved).toHaveLength(10);
+    for (const l of moved) expect(l.sourcingState).toBe('IN_EVENT');
+
+    // 6. They can no longer be selected into a second basket.
+    expect(sourceableLines(moved)).toHaveLength(0);
+
+    // 7. The PRD now points at the event.
+    expect(sourcingRequisition(state, requisition.id)?.eventId).toBe('evt-new');
+
+    // 8. The event's one source reference is the PRD, which maps to both RQs.
+    expect(event.sourceReference).toBe('PRD-2026-0001');
+  });
+
+  it('leaves the pool alone when an event is created without a basket', () => {
+    const before = initialState();
+    const after = reducer(before, {
+      type: 'CREATE_EVENT',
+      event: { id: 'e', eventNumber: 'X' } as SourcingEvent,
+      lots: [] as Lot[],
+    });
+    expect(after.purchaseRequestLines).toBe(before.purchaseRequestLines);
+  });
+
+  it('assigns the next PRD number on a second basket', () => {
+    let state = initialState();
+    const first = buildSourcingRequisition({
+      lines: sourceableLines(linesFor(state.purchaseRequestLines, 'pr-00033')).slice(0, 2),
+      requests: state.purchaseRequests, existing: state.sourcingRequisitions,
+      userId: 'user-ar', now: 0,
+    });
+    state = reducer(state, { type: 'CREATE_SOURCING_REQUISITION', requisition: first });
+
+    const second = buildSourcingRequisition({
+      lines: sourceableLines(linesFor(state.purchaseRequestLines, 'pr-00124')).slice(0, 2),
+      requests: state.purchaseRequests, existing: state.sourcingRequisitions,
+      userId: 'user-ar', now: 0,
+    });
+    expect(second.prdNumber).toBe('PRD-2026-0002');
   });
 });

@@ -93,6 +93,109 @@ export interface SourcingEvent {
 }
 
 // ---------------------------------------------------------------------------
+// Purchase requests — the demand a sourcing event is raised against
+// ---------------------------------------------------------------------------
+
+/**
+ * A requisition header. The amount is deliberately *not* stored: it is the sum
+ * of its lines, so a header and its expanded detail can never disagree.
+ */
+export type PrStatus =
+  | 'DRAFT'
+  | 'PENDING'
+  | 'APPROVAL'
+  | 'APPROVED'
+  | 'SOURCING'
+  | 'PARTIALLY_SOURCED'
+  | 'CLOSED'
+  | 'REJECTED';
+
+/**
+ * What has happened to a requisition line from the sourcing side. This is the
+ * RFx view of a PR: a line is demand that is either waiting to be sourced, out
+ * in an event, already awarded, or covered by a standing contract.
+ */
+export type PrLineSourcingState =
+  | 'UNSOURCED'
+  | 'IN_EVENT'
+  | 'AWARDED'
+  | 'ON_CONTRACT'
+  | 'CANCELLED';
+
+export interface PurchaseRequest {
+  id: Id;
+  tenantId: Id;
+  requestNumber: string;
+  title: string;
+  category: string;
+  /** The parent category in the spend taxonomy. Shown as "-" when unclassified. */
+  superCategory: string | null;
+  status: PrStatus;
+  submittedOn: string;
+  submittedById: Id;
+  submittedByName: string;
+  /** Employee code, shown under the name in the list. */
+  submittedByCode: string;
+  businessUnit: string;
+  costCentre: string;
+  currency: string;
+  needBy: string;
+  deliveryLocation: string;
+  justification: string;
+}
+
+export interface PurchaseRequestLine {
+  id: Id;
+  requestId: Id;
+  lineNumber: number;
+  itemCode: string;
+  description: string;
+  specification: string;
+  quantity: number;
+  uom: string;
+  needBy: string;
+  deliveryLocation: string;
+  /** The requisitioner's indicative price. Never a baseline on its own. */
+  indicativePrice: number | null;
+  currency: string;
+  sourcingState: PrLineSourcingState;
+  /** The event this line went out in, once it has been sourced. */
+  eventNumber: string | null;
+  hasVendorQuote: boolean;
+  isCatalogItem: boolean;
+}
+
+/**
+ * A consolidated demand: the system-assigned object that maps one sourcing
+ * event back to the many requisition lines it was raised for.
+ *
+ * This is what makes "source these 40 lines from six different requisitions"
+ * traceable. The event carries one `sourceReference` — the PRD id — and the PRD
+ * carries the RQ numbers and the specific lines, so an award line can be walked
+ * back to the requisition that asked for it.
+ */
+export interface SourcingRequisition {
+  id: Id;
+  /** System-assigned. Never typed by a user. */
+  prdNumber: string;
+  tenantId: Id;
+  /** The requisition lines consolidated into this demand. */
+  lineIds: Id[];
+  /** The requisitions those lines came from, in number order. */
+  requestNumbers: string[];
+  /** Single category by construction — a mixed-category basket is refused. */
+  category: string;
+  superCategory: string | null;
+  /** Every business unit represented, dominant first. */
+  businessUnits: string[];
+  currency: string;
+  createdBy: Id;
+  createdAt: ServerMillis;
+  /** Set once the event is published against it. */
+  eventId: Id | null;
+}
+
+// ---------------------------------------------------------------------------
 // Journey patterns
 // ---------------------------------------------------------------------------
 
@@ -235,6 +338,57 @@ export type QuestionType =
   // advanced
   | 'calculated_field' | 'lookup' | 'signature' | 'table' | 'hidden_metadata';
 
+/**
+ * One selectable answer.
+ *
+ * `score` is what the choice is worth under RULE scoring — the thing that turns
+ * a rubric written in prose ("DDP = 10 · DAP = 7") into something the system can
+ * actually compute. `isDisqualifying` is what a knockout question fires on:
+ * without it a knockout has no trigger and can never fail anyone.
+ */
+export interface QuestionOption {
+  id: Id;
+  label: string;
+  /** Points under RULE scoring. Null when a human scores the answer. */
+  score: number | null;
+  /** Choosing this fails the question. A knockout needs at least one. */
+  isDisqualifying: boolean;
+  /** "Other — please specify": free text must accompany the choice. */
+  requiresDetail: boolean;
+}
+
+/**
+ * The answer format for one question — the fields that only make sense once a
+ * type is chosen. A multiple choice needs a list of choices; a number needs
+ * bounds and a unit; a file upload needs formats.
+ *
+ * Rather than a union of twenty-six shapes, each type declares the *facets* it
+ * uses in `QUESTION_TYPE_SPEC`, and only those keys are ever read or edited.
+ * Changing a question's type carries over the facets the two types share and
+ * drops the rest, so a stale key can never quietly drive behaviour.
+ */
+export interface QuestionConfig {
+  /** Choice types: the list the supplier picks from. */
+  options?: QuestionOption[];
+  minSelections?: number | null;
+  maxSelections?: number | null;
+  min?: number | null;
+  max?: number | null;
+  unit?: string;
+  decimals?: number;
+  maxLength?: number | null;
+  acceptedFormats?: string[];
+  maxFileSizeMb?: number | null;
+  earliest?: string | null;
+  latest?: string | null;
+  /** Row labels for a matrix; column headers for a table, rate card or grid. */
+  rows?: string[];
+  columns?: string[];
+  formula?: string;
+  /** Clause text, instructions, declaration — whatever the type shows verbatim. */
+  body?: string;
+}
+
 export interface Question {
   id: Id;
   questionnaireId: Id;
@@ -254,6 +408,8 @@ export interface Question {
   rubric: string | null;
   isKnockout: boolean;
   allowAttachment: boolean;
+  /** Answer format. Carried from the template the question came from. */
+  config?: QuestionConfig;
 }
 
 export interface Questionnaire {
@@ -262,6 +418,91 @@ export interface Questionnaire {
   stage: Stage;
   name: string;
   questions: Question[];
+}
+
+// ---------------------------------------------------------------------------
+// Questionnaire templates — configured once, applied at many stages
+// ---------------------------------------------------------------------------
+
+export type TemplateStatus = 'DRAFT' | 'PUBLISHED' | 'RETIRED';
+
+/**
+ * Sections group questions; they do not carry their own weight. A section's
+ * share is the sum of the scored questions inside it, so a declared weight
+ * could disagree with its own contents — the same header/detail drift the
+ * requisition amount is derived to avoid.
+ */
+export interface TemplateSection {
+  id: Id;
+  name: string;
+  sequence: number;
+}
+
+/**
+ * A question as it exists in a template — the same shape the event-level
+ * `Question` carries, bound to a template rather than to one event's
+ * questionnaire. The template is where the answer format is authored, so
+ * `config` is required here and optional on the event-level question that
+ * inherits it.
+ */
+export interface TemplateQuestion {
+  id: Id;
+  templateId: Id;
+  sectionId: Id | null;
+  sequence: number;
+  /**
+   * Stable code. Two templates that ask the same thing at different stages
+   * share a code, which is what lets an answer given at RFI be carried into
+   * RFP rather than asked twice.
+   */
+  code: string;
+  type: QuestionType;
+  title: string;
+  helpText: string;
+  isRequired: boolean;
+  envelope: QuestionEnvelope;
+  weight: number;
+  scoringMethod: ScoringMethod;
+  maxScore: number;
+  rubric: string | null;
+  isKnockout: boolean;
+  allowAttachment: boolean;
+  /** The answer format — which keys apply is decided by `type`. */
+  config: QuestionConfig;
+}
+
+export interface QuestionnaireTemplate {
+  id: Id;
+  /** Stable across versions, e.g. QT-RFI-CAPABILITY. */
+  code: string;
+  name: string;
+  description: string;
+  /**
+   * The points in the journey where this template may be put in front of a
+   * supplier. A template is not tied to one stage — the same capability set is
+   * routinely asked at RFI and re-confirmed at RFP.
+   */
+  appliesTo: VendorInputPoint[];
+  /** Categories this template serves. Empty means any category. */
+  categories: string[];
+  sections: TemplateSection[];
+  questions: TemplateQuestion[];
+  status: TemplateStatus;
+  version: number;
+  scopeType: ConfigScopeType;
+  scopeId: Id;
+  createdBy: Id;
+  createdAt: ServerMillis;
+}
+
+/**
+ * How much the questionnaire at each vendor input point contributes to the
+ * technical score. An event that asks for information three times must say what
+ * each asking is worth, or the last one silently wins.
+ */
+export interface StageWeight {
+  point: VendorInputPoint;
+  weight: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -600,6 +841,9 @@ export interface AwardConstraints {
 
 export type ApprovalDecision = 'PENDING' | 'APPROVED' | 'RETURNED' | 'REJECTED' | 'DELEGATED';
 
+/** How a step came to be held by the person holding it. */
+export type ApprovalStepKind = 'NORMAL' | 'DELEGATED' | 'ESCALATED' | 'UPLIFT';
+
 export interface ApprovalStep {
   id: Id;
   nfaId: Id;
@@ -612,6 +856,22 @@ export interface ApprovalStep {
   /** Mandatory on RETURNED and REJECTED. */
   comment: string | null;
   decidedAt: ServerMillis | null;
+  /** Which revision of the note this step belongs to. Revision 1 by default. */
+  revisionNumber?: number;
+  kind?: ApprovalStepKind;
+  /** Set when the step was passed on: the original holder stays visible. */
+  delegatedToId?: Id | null;
+  delegatedToName?: string | null;
+  /** Set when a breached SLA escalated the step upward. */
+  escalatedFromName?: string | null;
+  /**
+   * A decision invalidated by a later material revision. Superseded decisions
+   * are struck through in the chain history, never deleted.
+   */
+  superseded?: boolean;
+  supersededReason?: string | null;
+  /** A non-material amendment keeps earlier approvals; they carry forward. */
+  carriedForward?: boolean;
 }
 
 export interface Nfa {
@@ -627,8 +887,162 @@ export interface Nfa {
   /** Applied automatically when awarding other than rank 1. */
   doaUpliftApplied: boolean;
   overrideReason: string | null;
+  /** The live steps of the current revision. History lives on `revisions`. */
   steps: ApprovalStep[];
   createdAt: ServerMillis;
+
+  // -- Pack 28: lifecycle ---------------------------------------------------
+  status: NfaStatus;
+  /** Every submitted revision, oldest first. The last one is the live note. */
+  revisions: NfaRevision[];
+  /** The working document the buyer is editing, which may not be submitted. */
+  draft: NfaDocument;
+  /** Mandatory, captured at rejection, carried into any successor note. */
+  rejectionReason: string | null;
+  /** Mandatory, captured at recall. */
+  recallReason: string | null;
+  /** OD-04b: a rejected note may be superseded by a linked successor NFA. */
+  supersededByNfaId: Id | null;
+  predecessorNfaId: Id | null;
+}
+
+// ---------------------------------------------------------------------------
+// Pack 28 — NFA lifecycle, revisions and amendments
+// ---------------------------------------------------------------------------
+
+export type NfaStatus =
+  /** Submitted and moving through the chain. */
+  | 'IN_APPROVAL'
+  /** An approver returned it; the buyer holds the pen. */
+  | 'RETURNED'
+  /** The buyer pulled it back before a decision closed the chain. */
+  | 'RECALLED'
+  | 'APPROVED'
+  | 'REJECTED';
+
+export type NfaRevisionOutcome =
+  | 'IN_FLIGHT'
+  | 'APPROVED'
+  | 'RETURNED'
+  | 'REJECTED'
+  | 'RECALLED'
+  | 'SUPERSEDED';
+
+/**
+ * What a change to the note is worth. The whole pack turns on this word:
+ * a material change restarts the chain, a non-material one does not.
+ */
+export type ChangeClass = 'NONE' | 'NON_MATERIAL' | 'MATERIAL';
+
+/** One awarded allocation line. Every line traces to a bid — never to nothing. */
+export interface NfaAllocationLine {
+  lineId: Id;
+  lotId: Id;
+  lotName: string;
+  bidderId: Id;
+  bidderName: string;
+  sharePct: number;
+  quantity: number;
+  value: number;
+  /** The bid this award line traces to. An empty string is a defect, not a state. */
+  bidId: Id;
+}
+
+/**
+ * The diffable content of the note. Pack 22 owns how the twelve sections are
+ * *rendered*; this is what a revision *freezes* so two revisions can be compared.
+ */
+export interface NfaDocument {
+  scenarioId: Id;
+  currency: string;
+  allocations: NfaAllocationLine[];
+  totalValue: number;
+  comparisonSheetVersion: number;
+  rankOverride: boolean;
+  overrideReason: string | null;
+  deviations: string[];
+  /** The resolved chain, reduced to one comparable string. */
+  chainSignature: string;
+  // Narrative and administrative fields — non-material by default.
+  recommendation: string;
+  riskStatement: string;
+  processSummary: string;
+  competitionSummary: string;
+  costCentre: string | null;
+  requiredByDate: string | null;
+  paymentTerms: string;
+}
+
+/**
+ * The DoA chain as it stood when a revision was submitted. Editing the matrix
+ * next quarter must not alter how a decision taken today renders, so the chain
+ * is copied into the revision rather than resolved again at read time.
+ */
+export interface NfaChainSnapshot {
+  ruleId: Id | null;
+  ruleName: string;
+  chainMode: 'SEQUENTIAL' | 'PARALLEL' | 'ANY_ONE';
+  capturedAt: ServerMillis;
+  totalSlaHours: number;
+  upliftApplied: boolean;
+  levels: { level: number; role: string; holderName: string; slaHours: number }[];
+}
+
+/** A correction to an already-approved revision that does not re-enter approval. */
+export interface NfaErratum {
+  id: Id;
+  revisionNumber: number;
+  field: string;
+  label: string;
+  from: string;
+  to: string;
+  /** Mandatory. An errata note with no reason is not an errata note. */
+  reason: string;
+  authoredBy: Id;
+  authoredByName: string;
+  authoredAt: ServerMillis;
+}
+
+export interface NfaRevision {
+  id: Id;
+  nfaId: Id;
+  number: number;
+  document: NfaDocument;
+  chainSnapshot: NfaChainSnapshot;
+  /** The steps of this revision, with their decisions, frozen at close. */
+  steps: ApprovalStep[];
+  outcome: NfaRevisionOutcome;
+  /** "returned by level 2", "rejected by the CFO", "recalled by the buyer". */
+  outcomeDetail: string | null;
+  changeClass: ChangeClass;
+  changeSummary: string;
+  submittedBy: Id;
+  submittedByName: string;
+  submittedAt: ServerMillis;
+  closedAt: ServerMillis | null;
+  /** Set when this revision restarted the chain and invalidated approvals. */
+  supersededApprovals: { level: number; role: string; holderName: string }[];
+  errata: NfaErratum[];
+}
+
+/**
+ * A rate contract an award established. It exists here for one reason: it is
+ * the only legitimate destination for "we also need this item" that does not
+ * require a new event.
+ */
+export interface RateContract {
+  id: Id;
+  contractNumber: string;
+  eventId: Id;
+  supplierId: Id;
+  supplierName: string;
+  /** The categories the contract's scope covers. Outside them, it cannot absorb a line. */
+  categoryScope: string[];
+  currency: string;
+  ceilingValue: number;
+  committedValue: number;
+  startsAt: ServerMillis;
+  expiresAt: ServerMillis;
 }
 
 export interface DoARule {

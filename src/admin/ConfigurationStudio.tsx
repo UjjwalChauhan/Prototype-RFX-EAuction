@@ -22,6 +22,8 @@ import {
   checkMandate, effectiveAutonomy,
 } from '../domain/agents';
 import { simulate } from '../domain/doa';
+import { JourneyPatternsPanel, journeyCount } from './JourneyPatternsPanel';
+import { QuestionnairePanel, templateCount } from './QuestionnairePanel';
 import { useStore } from '../store/store';
 import { DOA_RULES, SCOPE_LINEAGE } from '../data/seed';
 import type { AutonomyLevel, ConfigScopeType, DoARule } from '../domain/types';
@@ -117,14 +119,20 @@ export function ConfigurationStudio() {
         title="Domains"
         activeId={domain}
         onSelect={setDomain}
-        items={CONFIG_DOMAINS.map((d) => ({
-          id: d.key,
-          label: d.label,
-          badge:
-            (DOMAIN_KEYS[d.key]?.length ?? 0) > 0
-              ? <Chip tone="neutral">{DOMAIN_KEYS[d.key].length}</Chip>
-              : undefined,
-        }))}
+        items={CONFIG_DOMAINS.map((d) => {
+          // Journey patterns are not scalar settings, so the badge counts the
+          // journeys visible at this scope rather than the keys in the domain.
+          const count = d.key === 'patterns'
+            ? journeyCount(state.configSettings, lineage)
+            : d.key === 'questionnaire'
+              ? templateCount(state.configSettings, lineage)
+              : (DOMAIN_KEYS[d.key]?.length ?? 0);
+          return {
+            id: d.key,
+            label: d.label,
+            badge: count > 0 ? <Chip tone="neutral">{count}</Chip> : undefined,
+          };
+        })}
       />
 
       <div className="rfx-stack" style={{ gap: 14 }}>
@@ -167,7 +175,11 @@ export function ConfigurationStudio() {
           </div>
         </Card>
 
-        {keys.length === 0 ? (
+        {domain === 'patterns' ? (
+          <JourneyPatternsPanel scope={scope} lineage={lineage} />
+        ) : domain === 'questionnaire' ? (
+          <QuestionnairePanel scope={scope} lineage={lineage} />
+        ) : keys.length === 0 ? (
           <Card>
             <div style={{ padding: '28px 8px', textAlign: 'center' }}>
               <div aria-hidden style={{ fontSize: 24 }}>⚙</div>
@@ -176,8 +188,9 @@ export function ConfigurationStudio() {
               </div>
               <div style={{ fontSize: 12, color: color.textSecondary, marginTop: 6, maxWidth: 420, marginInline: 'auto', lineHeight: 1.6 }}>
                 This domain has no scalar settings wired in this build. The domains with settings —
-                evaluation, auction, negotiation, award, approval, counterparty and agents — demonstrate
-                the resolution model end to end.
+                event defaults, evaluation, auction, negotiation, award, approval, counterparty and
+                agents — demonstrate the resolution model end to end. Journey patterns and
+                questionnaire demonstrate it over collections rather than scalars.
               </div>
             </div>
           </Card>

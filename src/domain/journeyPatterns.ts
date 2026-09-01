@@ -7,15 +7,15 @@
  */
 import type { JourneyPattern, JourneyPatternId, Stage, VendorInputPoint } from './types';
 
-const WIZARD_BASICS = 'Basics';
-const WIZARD_ITEMS = 'Items & Lots';
-const WIZARD_BIDDERS = 'Bidders';
-const WIZARD_QUESTIONNAIRE = 'Questionnaire';
-const WIZARD_TERMS = 'Terms';
-const WIZARD_EVALUATION = 'Evaluation';
-const WIZARD_AUCTION = 'Auction';
-const WIZARD_TIMELINE = 'Timeline';
-const WIZARD_REVIEW = 'Review';
+export const WIZARD_BASICS = 'Basics';
+export const WIZARD_ITEMS = 'Items & Lots';
+export const WIZARD_BIDDERS = 'Bidders';
+export const WIZARD_QUESTIONNAIRE = 'Questionnaire';
+export const WIZARD_TERMS = 'Terms';
+export const WIZARD_EVALUATION = 'Evaluation';
+export const WIZARD_AUCTION = 'Auction';
+export const WIZARD_TIMELINE = 'Timeline';
+export const WIZARD_REVIEW = 'Review';
 
 export const JOURNEY_PATTERNS: Record<JourneyPatternId, JourneyPattern> = {
   'JP-01': {

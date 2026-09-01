@@ -43,9 +43,28 @@ That is why the "RFQ list" in the nav is a filtered projection
 event workspace derives its tab strip from the journey pattern rather than
 hard-coding thirteen tabs.
 
+A fourth, on what is asked: **a questionnaire is not owned by a stage.** An RFx
+journey asks the supplier for information at several points, and the same
+capability set is routinely asked more than once — so a template declares the
+`VendorInputPoint`s it may be applied at, and the journey decides which of those
+run. A stable question `code` is what lets an answer given at RFI be carried into
+RFP rather than asked twice.
+
+A third, on the way in: **an event's source reference is a PRD, not a PR.** A
+sourcing event is routinely raised for lines drawn from several requisitions, so
+the event points at one consolidated demand and that demand carries the RQ
+numbers and the specific line ids. A typed requisition reference could not be
+walked back to lines; `PRD-2026-0001` can.
+
 The second load-bearing idea: **`side` (BUY or SELL) is set once at creation and
 is immutable**, and every comparison in the product routes through
 `src/domain/comparator.ts`. Nothing anywhere hard-codes "lowest wins".
+
+A corollary the journey composer rests on: **a journey is a subset of the
+canonical stage order, never a re-ordering.** `buildStageRail` and
+`workspaceTabs` both walk `STAGE_ORDER`, so a journey claiming AUCTION before
+RFQ would render in canonical order anyway and the configuration would be a lie.
+The composer therefore offers inclusion only, and normalises what it is given.
 
 ---
 
@@ -62,12 +81,19 @@ src/
     evaluation.ts        Scoring, and the corrected award-score model
     savings.ts           Baselines, negotiated vs realised
     journeyPatterns.ts   JP-01…JP-13, the stage rail, transition gates
+    journeyComposer.ts   Stage components, derivation and validation for custom journeys
+    purchaseRequests.ts  Requisition lines as sourceable demand; amounts derived, never stored
+    sourcingRequisition.ts  Consolidating lines across requisitions into one PRD demand
+    questionnaireTemplates.ts  What is asked at each vendor input point, and what it is worth
+    questionTypes.ts     What each question type asks for, and the suggested choice sets
     config.ts            Four-scope resolution with locking
     doa.ts               Delegation of authority + the simulator
+    nfaLifecycle.ts      The NFA after the first run — materiality, revisions,
+                         chain consequence, recall, rejection, scope-change routing
     agents.ts            The sixteen agents and their eight hard limits
     permissions.ts       Roles and the hard separation rules
     statusMachine.ts     Legal transitions and status presentation
-    __tests__/           ~200 assertions over the above
+    __tests__/           ~500 assertions over the above
 
   server/            The boundary a client talks to. Owns the clock and the seal.
     clock.ts             Server-authoritative time
@@ -77,8 +103,13 @@ src/
 
   design-system/     Pack 00, tokens and components
   data/seed.ts       Seed data lifted from the design files
+  data/purchaseRequests.ts  Requisitions, lines generated from a fixed seed (1–100 lines)
+  data/nfaScenarios.ts      Notes with history — a return, a recall, a rejection, an approval
   store/store.tsx    Reducer over the domain; components never mutate directly
-  admin/             Packs 01–09, 13–18, 20–23, 25–27
+  admin/             Packs 01–09, 13–18, 20–23, 25–28
+    nfa/                 Pack 28's surfaces: revision drawer and diff, amendment
+                         banner, chain history, recall, scope change, tolerance,
+                         errata, and the open-decision sheet
   portal/            Packs 10–12, 19, 24
 ```
 
@@ -184,6 +215,19 @@ These are enforced in the domain layer, not in the UI, so no setting reaches the
 - **Bid withdrawal and self-outbidding.** Never permitted. Both appear as
   permanently-disabled, explained toggles in Auction Setup so administrators can
   see the boundary rather than wonder whether it exists.
+- **Price never carries a question weight.** A `price_schedule`, `rate_table` or
+  `quantity_break` question that also scores puts price in two places, which is
+  the same defect `validateAwardScoreModel` catches on the award side. The
+  builder zeroes the weight on switching to a priced type rather than letting a
+  template save into an error state.
+- **RFI is pre-commercial.** A template applied at RFI may not carry commercial
+  questions — RFI qualifies the market before anyone is asked for a price. That
+  is what the stage means, not a preference.
+- **A knockout must have something to fail on.** A knockout choice question
+  where no answer is marked as failing can never fire — a safety net with no
+  hole in it, which is worse than none because it reads as protection. So is a
+  rule-scored choice question where no choice carries a score. Both are errors,
+  not warnings.
 - **The eight agent hard limits.** `assertAgentMayNot` throws; there is no flag.
   Agents assist, humans decide.
 - **Separation of duties.** `score_technical` and `view_commercial` cannot
@@ -225,6 +269,62 @@ Switch from the user menu. Each demonstrates a different boundary:
 7. **Configuration Studio** — change the feedback policy at category scope and
    watch the event-scope value still win; try to change `blind_technical`, which
    is locked at tenant.
+8. **Open a purchase request** — Procurement → Purchase Request. Click a request
+   number to expand it into its items. RQ-TGRANL-00108 carries 100 lines, and
+   00115, 00119, 00122, 00124 and 00033 sit at 76, 57, 38, 24 and 20, so the
+   expansion is exercised across the range rather than at one point. The amount
+   on the row is the sum of the lines in the panel — the same array, so the two
+   cannot disagree — and a line already out in an event is not offered for
+   sourcing again.
+9. **Consolidate demand and source it** — the *Requested* tab is the basket: every
+   requisition line across every requisition, each against its own RQ id. Tick
+   lines from several requisitions and the rest of the list greys out, because
+   category binds a basket — it drives the questionnaire, the shortlist, the
+   evaluation model and the DoA chain, so one event cannot carry two. *Initiate
+   sourcing* assigns a **PRD** number mapping the demand to its RQ ids, and opens
+   the wizard with basics and lines populated. Publishing marks exactly those
+   lines as out in the event, in the same dispatch that creates it.
+10. **Configure a questionnaire** — Configuration Studio → Questionnaire. *Journey
+   weighting* is the point: pick a journey pattern and the six vendor input points
+   show what each asking contributes to the technical score, renormalised over the
+   points that journey actually runs — JP-06 runs RFP alone, so RFP takes 100%.
+   Weights are relative, never percentages, and the effective share is shown
+   beside each. *Template library* holds the question sets; QT-RFI-COMBINED is
+   deliberately broken so the three rules have something real to catch.
+11. **Compose a journey** — the Journey patterns domain shows the thirteen-pattern
+   master and composes new journeys from stage components. Pick components and the
+   wizard, the workspace tabs, the supplier task labels and the duration estimate
+   all recompute, because every one of them is derived from the stage set rather
+   than entered. Enablement resolves narrowest-wins like every other setting;
+   custom journeys deliberately do not — they **accumulate** down the chain, so
+   the tenant's `CJ-01` stays available inside Indirect alongside the category's
+   own `CJ-02`.
+12. **Put an award through a second run** — Approvals, on RFQ-2026-0142. Seed a
+   note from the rail: *Three revisions* gives a return at level 2, a recall
+   after that, and a live third revision carrying a delegation and an escalation.
+   *Revision 3 of 3* opens the drawer — read any revision exactly as its approver
+   saw it, or compare two, where a changed allocation renders in the material
+   column and a re-worded recommendation does not. Amend a returned note and the
+   banner updates as you type: **non-material resumes at level 2, material
+   restarts from level 1 and names whose approvals it discards** — before you
+   submit, never after. Superseded approvals are struck in the chain history and
+   never removed. Flip *DoA matrix edited since* and open revision 3: it still
+   renders the chain it was decided under, and says the live matrix has moved.
+13. **Hit the wall after the award** — Items & Lots or the award scenario grid,
+   once the event is at Award Recommended or later. *Add a line* does not fail
+   silently and is not a greyed control: it opens the panel that says an award
+   line must trace to a bid and this item was never quoted, then offers the
+   routes that are legitimate — a new event carrying the lineage and the
+   shortlist, a call-off with its remaining ceiling headroom where the award
+   established a contract that covers the category, and the corrigendum flow
+   while responses are still open. OD-06 switches the panel between listing,
+   recommending and pre-selecting.
+14. **Settle nine open decisions by pointing** — *Open the sheet* in the
+   Approvals rail. Each of §B14.8's nine decisions, every option, and what the
+   screen looks like under it. Choosing an option flips the screens behind the
+   drawer, so recall after first approval, rejection's aftermath, the tolerance
+   re-approval path and post-approval correction can each be seen both ways
+   rather than imagined.
 
 ---
 
@@ -242,7 +342,9 @@ Honest about what this build does and does not include:
   application code; the key management behind it is infrastructure.
 - **Some packs are represented rather than fully built.** The form builder edits
   an existing questionnaire rather than composing all 26 question types; the
-  template library and analytics (Pack 27) are not built.
+  template library and analytics (Pack 27) are not built. Pack 28 hands off to
+  Pack 04's wizard and Pack 05's corrigendum rather than rebuilding either — the
+  handoff is recorded and shown, and the destination screen is the existing one.
 - **Four of the ten auction mechanisms run end to end** — English, sealed bid,
   and the single-shot path — the rest are configurable and their rules render,
   but the engine's round handling for Japanese and Dutch clocks is not driven by

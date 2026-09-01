@@ -211,13 +211,18 @@ export function TextInput({
 }
 
 export function NumberInput({
-  style, ...rest
-}: React.InputHTMLAttributes<HTMLInputElement>) {
+  invalid, style, ...rest
+}: React.InputHTMLAttributes<HTMLInputElement> & { invalid?: boolean }) {
   return (
     <input
       {...rest}
       type="number"
-      style={{ ...CONTROL_BASE, ...tabular, ...style }}
+      style={{
+        ...CONTROL_BASE, ...tabular,
+        borderColor: invalid ? color.danger : color.border,
+        ...(rest.disabled ? { background: color.neutralSoft, color: color.textMuted } : {}),
+        ...style,
+      }}
     />
   );
 }

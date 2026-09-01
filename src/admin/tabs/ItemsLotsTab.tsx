@@ -9,15 +9,27 @@ import { color, money, radius } from '../../design-system/tokens';
 import { Button, Chip, CurrencyInput, Field, Segmented } from '../../design-system/components/primitives';
 import { Card, Table, type Column } from '../../design-system/components/layout';
 import { ValidationBanner } from '../../design-system/components/domain';
-import { lotsForEvent, useStore } from '../../store/store';
+import { contractsForEvent, lotsForEvent, useStore } from '../../store/store';
 import { LINE_ITEMS } from '../../data/seed';
+import { isPostAward } from '../../domain/nfaLifecycle';
+import { UNQUOTED_ITEM } from '../../data/nfaScenarios';
+import { ScopeChangePanel } from '../nfa/ScopeChangePanel';
 import type { LineItem, LotStrategy } from '../../domain/types';
 
 export function ItemsLotsTab({ eventId }: { eventId: string }) {
   const { state, dispatch } = useStore();
+  const event = state.events.find((e) => e.id === eventId)!;
   const lots = lotsForEvent(state, eventId);
   const [strategy, setStrategy] = React.useState<LotStrategy>(state.auction.auction.lotStrategy);
   const [selectedLot, setSelectedLot] = React.useState(lots[0]?.id ?? '');
+  /**
+   * Pack 28 D7. At Award Recommended or later a line can no longer simply be
+   * added: an award line must trace to a bid. The control is not removed and
+   * does not fail silently — it opens the panel that explains why and offers
+   * the destinations that are legitimate.
+   */
+  const [scopeChangeOpen, setScopeChangeOpen] = React.useState(false);
+  const locked = isPostAward(event.status);
 
   const lines = LINE_ITEMS.filter((l) => lots.some((lot) => lot.id === l.lotId));
   const lotLines = lines.filter((l) => l.lotId === selectedLot);
@@ -211,10 +223,53 @@ export function ItemsLotsTab({ eventId }: { eventId: string }) {
         padded={false}
         title={`Line items — ${lot?.name ?? 'all lots'}`}
         hint={`${lotLines.length} line(s). Baselines carry their source, which the savings engine reports against.`}
-        action={<Button size="small" variant="secondary">Import from PR</Button>}
+        action={
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <Button size="small" variant="secondary" disabled={locked}>Import from PR</Button>
+            <Button
+              size="small"
+              variant={locked ? 'primary' : 'secondary'}
+              onClick={() => locked ? setScopeChangeOpen(true) : undefined}
+              title={
+                locked
+                  ? 'This event is at award or beyond. Adding a line opens the panel that explains why it cannot join this award.'
+                  : undefined
+              }
+            >
+              Add a line
+            </Button>
+          </div>
+        }
       >
+        {locked && (
+          <div style={{ padding: '10px 16px 0' }}>
+            <ValidationBanner tone="info" title="Read-only except award-quantity adjustment within tolerance">
+              This event is at <strong>{event.status.replace(/_/g, ' ').toLowerCase()}</strong>. The lines
+              below are frozen; the awarded quantity can still move within tolerance from the Approvals
+              tab. Adding a line opens an explanation and a route, never a silent failure.
+            </ValidationBanner>
+          </div>
+        )}
         <Table columns={columns} rows={lotLines} rowKey={(l) => l.id} />
       </Card>
+
+      <ScopeChangePanel
+        open={scopeChangeOpen}
+        onClose={() => setScopeChangeOpen(false)}
+        settings={state.nfaOptions}
+        onSettingsChange={(patch) => dispatch({ type: 'SET_NFA_OPTION', patch })}
+        onRoute={() => setScopeChangeOpen(false)}
+        context={{
+          kind: 'ADD_LINE',
+          eventStatus: event.status,
+          origin: 'ITEMS_AND_LOTS',
+          itemDescription: UNQUOTED_ITEM.description,
+          itemCategory: UNQUOTED_ITEM.category,
+          itemValue: UNQUOTED_ITEM.estimatedValue,
+          currency: event.currency,
+          contract: contractsForEvent(state, eventId)[0] ?? null,
+        }}
+      />
     </div>
   );
 }

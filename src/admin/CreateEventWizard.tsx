@@ -8,7 +8,7 @@
 import React from 'react';
 import { color, money, radius } from '../design-system/tokens';
 import {
-  Button, Chip, Field, NumberInput, Radio, Segmented, Select,
+  Button, Chip, Field, NumberInput, Radio, ReadOnlyValue, Segmented, Select,
   TextInput, Textarea, Toggle,
 } from '../design-system/components/primitives';
 import { Card, Stepper, Table, type Column } from '../design-system/components/layout';
@@ -17,10 +17,15 @@ import { ALL_PATTERNS, JOURNEY_PATTERNS, patternsForSide } from '../domain/journ
 import { mechanismGuidance } from '../domain/auctionEngine';
 import { DEFAULT_ANTI_GAMING } from '../domain/auctionEngine';
 import { directionLabel } from '../domain/comparator';
-import { useStore } from '../store/store';
+import {
+  linesOfRequisition, sourcingRequisition, useStore, type AppState,
+} from '../store/store';
+import { suggestedTitle, toConsolidatedLines } from '../domain/sourcingRequisition';
+import { categoriesOf } from '../domain/purchaseRequests';
 import { COUNTERPARTIES } from '../data/seed';
 import type {
   AuctionMechanism, FeedbackPolicy, JourneyPatternId, Lot, Side, SourcingEvent,
+  SourcingRequisition,
 } from '../domain/types';
 import type { Route } from './AdminShell';
 
@@ -32,6 +37,9 @@ interface DraftLine {
   uom: string;
   baselinePrice: number | null;
   lotName: string;
+  /** Set when the line came from a requisition. PR line -> event line -> bid. */
+  sourcePrLineId?: string;
+  sourceRequestNumber?: string;
 }
 
 interface Draft {
@@ -42,7 +50,12 @@ interface Draft {
   category: string;
   businessUnit: string;
   currency: string;
+  /**
+   * The consolidated demand this event is raised against. System-assigned and
+   * read-only — a typed requisition reference cannot be walked back to lines.
+   */
   sourceReference: string;
+  sourceRequestNumbers: string[];
   lines: DraftLine[];
   bidderIds: string[];
   questionnaireTemplate: string;
@@ -65,7 +78,8 @@ const INITIAL_DRAFT: Draft = {
   category: 'Indirect',
   businessUnit: 'Corporate Services',
   currency: 'USD',
-  sourceReference: 'PR-2024-0125',
+  sourceReference: '',
+  sourceRequestNumbers: [],
   lines: [
     { id: 'dl-1', itemCode: 'PPR-A4-80', description: 'A4 copier paper, 80gsm, ream of 500', quantity: 12_000, uom: 'ream', baselinePrice: 8.67, lotName: 'Lot 1 · Paper' },
     { id: 'dl-2', itemCode: 'PEN-BLU-BX', description: 'Ballpoint pen, blue, box of 50', quantity: 900, uom: 'box', baselinePrice: 18.5, lotName: 'Lot 2 · Writing' },
@@ -83,9 +97,49 @@ const INITIAL_DRAFT: Draft = {
   termsAttached: true,
 };
 
-export function CreateEventWizard({ onNavigate }: { onNavigate: (route: Route) => void }) {
+/**
+ * Build the opening draft from a consolidated demand. Everything the
+ * requisitions already answered is answered here — category, business unit,
+ * currency, the lines and their lotting — so the buyer is asked only for what
+ * a requisition cannot know: the journey pattern, the bidders and the timings.
+ */
+function draftFromRequisition(
+  requisition: SourcingRequisition,
+  state: AppState,
+): Draft {
+  const lines = linesOfRequisition(state, requisition);
+  const requests = state.purchaseRequests;
+  const consolidated = toConsolidatedLines(lines, requests);
+
+  return {
+    ...INITIAL_DRAFT,
+    title: suggestedTitle(lines, requests),
+    description:
+      `Raised against ${requisition.prdNumber}, consolidating ${lines.length} `
+      + `${lines.length === 1 ? 'line' : 'lines'} from ${requisition.requestNumbers.join(', ')}.`,
+    category: requisition.category,
+    businessUnit: requisition.businessUnits[0] ?? INITIAL_DRAFT.businessUnit,
+    currency: requisition.currency,
+    sourceReference: requisition.prdNumber,
+    sourceRequestNumbers: requisition.requestNumbers,
+    lines: consolidated.map((l) => ({
+      id: l.id, itemCode: l.itemCode, description: l.description,
+      quantity: l.quantity, uom: l.uom, baselinePrice: l.baselinePrice,
+      lotName: l.lotName, sourcePrLineId: l.sourcePrLineId,
+      sourceRequestNumber: l.sourceRequestNumber,
+    })),
+  };
+}
+
+export function CreateEventWizard({
+  onNavigate, prdId,
+}: { onNavigate: (route: Route) => void; prdId?: string }) {
   const { state, dispatch } = useStore();
-  const [draft, setDraft] = React.useState<Draft>(INITIAL_DRAFT);
+  const requisition = sourcingRequisition(state, prdId);
+
+  const [draft, setDraft] = React.useState<Draft>(() =>
+    requisition ? draftFromRequisition(requisition, state) : INITIAL_DRAFT,
+  );
   const [step, setStep] = React.useState(0);
   const [publishOpen, setPublishOpen] = React.useState(false);
   const [switchWarning, setSwitchWarning] = React.useState<JourneyPatternId | null>(null);
@@ -181,7 +235,15 @@ export function CreateEventWizard({ onNavigate }: { onNavigate: (route: Route) =
         minDecrement: draft.minDecrement,
       },
     };
-    dispatch({ type: 'CREATE_EVENT', event, lots });
+    dispatch({
+      type: 'CREATE_EVENT', event, lots,
+      // The lines this event was raised for leave the sourceable pool in the
+      // same dispatch that creates it.
+      sourcedLineIds: draft.lines
+        .map((l) => l.sourcePrLineId)
+        .filter((id): id is string => id !== undefined),
+      sourcingRequisitionId: requisition?.id,
+    });
     setPublishOpen(false);
     onNavigate({ name: 'event', eventId });
   };
@@ -195,7 +257,12 @@ export function CreateEventWizard({ onNavigate }: { onNavigate: (route: Route) =
           </div>
           <div style={{ padding: 18 }}>
             {stepName === 'Basics' && (
-              <BasicsStep draft={draft} patch={patch} applyPattern={applyPattern} />
+              <BasicsStep
+                draft={draft}
+                patch={patch}
+                applyPattern={applyPattern}
+                requisition={requisition}
+              />
             )}
             {stepName === 'Items & Lots' && (
               <ItemsStep draft={draft} patch={patch} estimatedValue={estimatedValue} />
@@ -333,10 +400,59 @@ export function CreateEventWizard({ onNavigate }: { onNavigate: (route: Route) =
 // ---------------------------------------------------------------------------
 
 function BasicsStep({
-  draft, patch, applyPattern,
-}: { draft: Draft; patch: (p: Partial<Draft>) => void; applyPattern: (p: JourneyPatternId) => void }) {
+  draft, patch, applyPattern, requisition,
+}: {
+  draft: Draft;
+  patch: (p: Partial<Draft>) => void;
+  applyPattern: (p: JourneyPatternId) => void;
+  requisition?: SourcingRequisition;
+}) {
+  const { state } = useStore();
+
+  // A prefilled category or business unit must be selectable, so the option
+  // lists are the union of the standard set and whatever the demand carries.
+  const categories = [...new Set([
+    ...categoriesOf(state.purchaseRequests),
+    'Indirect', 'IT', 'Facilities', 'Services', 'Fleet',
+    draft.category,
+  ])].sort();
+  const businessUnits = [...new Set([
+    ...state.purchaseRequests.map((r) => r.businessUnit),
+    'Corporate Services', 'Technology', 'Marketing', 'Fleet',
+    draft.businessUnit,
+  ])].sort();
+
   return (
     <div className="rfx-stack" style={{ gap: 16 }}>
+      {requisition && (
+        <div
+          style={{
+            border: `1px solid ${color.brandPrimary}`, background: color.brandPrimarySoft,
+            borderRadius: radius.control, padding: '11px 13px',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <strong style={{ fontSize: 12.5, color: color.brandPrimary }}>
+              {requisition.prdNumber}
+            </strong>
+            <span style={{ fontSize: 11.5, color: color.textSecondary }}>
+              consolidates {requisition.lineIds.length} lines from{' '}
+              {requisition.requestNumbers.length} requisitions
+            </span>
+          </div>
+          <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', marginTop: 7 }}>
+            {requisition.requestNumbers.map((number) => (
+              <Chip key={number} tone="brand">{number}</Chip>
+            ))}
+          </div>
+          <div style={{ fontSize: 11, color: color.textSecondary, marginTop: 8, lineHeight: 1.55 }}>
+            Category, business unit, currency and every line below came from these requisitions.
+            The event carries one source reference — the PRD — and the PRD carries the RQ numbers,
+            so an award line can be walked back to the requisition line that asked for it.
+          </div>
+        </div>
+      )}
+
       <div>
         <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>Side</div>
         <div style={{ fontSize: 11.5, color: color.textSecondary, marginBottom: 8 }}>
@@ -378,14 +494,24 @@ function BasicsStep({
             placeholder="Office Supplies Annual Contract"
           />
         </Field>
-        <Field label="Category">
+        <Field
+          label="Category"
+          hint={requisition ? `Populated from ${requisition.prdNumber}.` : undefined}
+        >
           <Select value={draft.category} onChange={(e) => patch({ category: e.target.value })}>
-            {['Indirect', 'IT', 'Facilities', 'Services', 'Fleet'].map((c) => <option key={c}>{c}</option>)}
+            {categories.map((c) => <option key={c}>{c}</option>)}
           </Select>
         </Field>
-        <Field label="Business unit">
+        <Field
+          label="Business unit"
+          hint={
+            requisition && requisition.businessUnits.length > 1
+              ? `${requisition.businessUnits.length} units in the demand — the DoA chain resolves against this one.`
+              : requisition ? `Populated from ${requisition.prdNumber}.` : undefined
+          }
+        >
           <Select value={draft.businessUnit} onChange={(e) => patch({ businessUnit: e.target.value })}>
-            {['Corporate Services', 'Technology', 'Marketing', 'Fleet'].map((b) => <option key={b}>{b}</option>)}
+            {businessUnits.map((b) => <option key={b}>{b}</option>)}
           </Select>
         </Field>
         <Field label="Currency">
@@ -393,8 +519,18 @@ function BasicsStep({
             {['USD', 'EUR', 'GBP', 'INR', 'AED'].map((c) => <option key={c}>{c}</option>)}
           </Select>
         </Field>
-        <Field label="Source requisition" hint="Traceability: every award line ties back to a PR line.">
-          <TextInput value={draft.sourceReference} onChange={(e) => patch({ sourceReference: e.target.value })} />
+        <Field
+          label="Source requisition"
+          hint={
+            draft.sourceReference
+              ? 'System-assigned. Every award line ties back through it to a requisition line.'
+              : 'Assigned when the event is raised from a requisition basket.'
+          }
+          lockedBy={draft.sourceReference ? 'system' : undefined}
+        >
+          <ReadOnlyValue mono>
+            {draft.sourceReference || 'Not raised against a requisition'}
+          </ReadOnlyValue>
         </Field>
       </div>
 
@@ -408,9 +544,18 @@ function BasicsStep({
 function ItemsStep({
   draft, patch, estimatedValue,
 }: { draft: Draft; patch: (p: Partial<Draft>) => void; estimatedValue: number }) {
+  const sourced = draft.lines.filter((l) => l.sourcePrLineId !== undefined).length;
+
   const columns: Column<DraftLine>[] = [
     { key: 'code', header: 'Code', render: (l) => <span style={{ fontSize: 11.5, color: color.textSecondary }}>{l.itemCode}</span> },
     { key: 'desc', header: 'Description', render: (l) => l.description },
+    {
+      key: 'from', header: 'From', width: '150px',
+      render: (l) =>
+        l.sourceRequestNumber
+          ? <Chip tone="neutral" title="The requisition this line came from">{l.sourceRequestNumber}</Chip>
+          : <span style={{ color: color.textMuted, fontSize: 11.5 }}>added here</span>,
+    },
     { key: 'qty', header: 'Qty', numeric: true, render: (l) => l.quantity.toLocaleString() },
     { key: 'uom', header: 'UoM', render: (l) => l.uom },
     {
@@ -427,7 +572,7 @@ function ItemsStep({
           }
           style={{ width: 150, fontSize: 12 }}
         >
-          {[...new Set([...draft.lines.map((x) => x.lotName), 'Lot 3 · Filing'])].map((n) => (
+          {[...new Set(draft.lines.map((x) => x.lotName))].sort().map((n) => (
             <option key={n}>{n}</option>
           ))}
         </Select>
@@ -457,6 +602,27 @@ function ItemsStep({
         A lot is a group of lines bid, ranked and awarded as a unit. Lines carry their baseline and
         its source, which is what the savings engine later reports against.
       </div>
+      {sourced > 0 && (
+        <div
+          style={{
+            display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
+            border: `1px solid ${color.border}`, borderRadius: radius.control,
+            padding: '9px 12px', fontSize: 12, background: color.surface,
+          }}
+        >
+          <strong>{sourced} of {draft.lines.length} lines came from requisitions</strong>
+          <span style={{ color: color.textMuted }}>·</span>
+          <span style={{ color: color.textSecondary }}>
+            lotted by item family, so like competes with like
+          </span>
+          <span style={{ flex: 1 }} />
+          {[...new Set(draft.lines.map((l) => l.lotName))].sort().map((name) => (
+            <Chip key={name} tone="brand">
+              {name} ({draft.lines.filter((l) => l.lotName === name).length})
+            </Chip>
+          ))}
+        </div>
+      )}
       <Table columns={columns} rows={draft.lines} rowKey={(l) => l.id} />
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
         <Button

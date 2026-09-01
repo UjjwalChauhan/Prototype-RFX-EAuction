@@ -12,6 +12,15 @@ import type {
   Response, Score, SourcingEvent, User,
 } from '../domain/types';
 import { DEFAULT_ANTI_GAMING } from '../domain/auctionEngine';
+import {
+  JOURNEY_CUSTOM_KEY, JOURNEY_ENABLED_KEY, type CustomJourney,
+} from '../domain/journeyComposer';
+import {
+  TEMPLATE_CUSTOM_KEY, TEMPLATE_WEIGHTING_KEY,
+} from '../domain/questionnaireTemplates';
+import {
+  CATEGORY_TEMPLATES, DEFAULT_STAGE_WEIGHTING, TENANT_TEMPLATES,
+} from './questionnaireTemplates';
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
@@ -719,6 +728,95 @@ export const CONFIG_SETTINGS: ConfigSetting[] = [
     value: 1, isLocked: true, setBy: 'user-ar', setAt: SEED_NOW - 90 * DAY,
   },
 ];
+
+/**
+ * Custom journeys, seeded across two scopes so accumulation is visible: the
+ * tenant's own composed journey stays available inside Indirect rather than
+ * being replaced by the one the category composed for itself.
+ */
+const TENANT_JOURNEY: CustomJourney = {
+  id: 'CJ-01',
+  name: 'Sealed RFP with negotiation',
+  description:
+    'High-value services where price stays sealed until the technical panel has scored, and the shortlist is then negotiated rather than auctioned.',
+  side: 'BUY',
+  stages: ['INTAKE', 'RFP', 'CLARIFICATION', 'EVALUATION', 'NEGOTIATION', 'AWARD', 'APPROVAL'],
+  vendorInputPoints: ['RFP', 'NEGOTIATION'],
+  basedOn: 'JP-06',
+  scopeType: 'TENANT',
+  scopeId: 'tenant-udaan',
+  createdBy: 'user-ar',
+  createdAt: SEED_NOW - 60 * DAY,
+};
+
+const CATEGORY_JOURNEY: CustomJourney = {
+  id: 'CJ-02',
+  name: 'Indirect quick quote',
+  description:
+    'Three quotes and an award for low-value indirect spend. No approval stage — the DoA floor already covers this band.',
+  side: 'BUY',
+  stages: ['INTAKE', 'RFQ', 'AWARD'],
+  vendorInputPoints: ['RFQ'],
+  basedOn: 'JP-11',
+  scopeType: 'CATEGORY',
+  scopeId: 'Indirect',
+  createdBy: 'user-ar',
+  createdAt: SEED_NOW - 20 * DAY,
+};
+
+CONFIG_SETTINGS.push(
+  {
+    key: JOURNEY_CUSTOM_KEY, scopeType: 'TENANT', scopeId: 'tenant-udaan',
+    value: [TENANT_JOURNEY], isLocked: false, setBy: 'user-ar', setAt: SEED_NOW - 60 * DAY,
+  },
+  {
+    key: JOURNEY_CUSTOM_KEY, scopeType: 'CATEGORY', scopeId: 'Indirect',
+    value: [CATEGORY_JOURNEY], isLocked: false, setBy: 'user-ar', setAt: SEED_NOW - 20 * DAY,
+  },
+  {
+    // Indirect is a buy-side category: the two sell-side patterns are not
+    // offered, and neither is the rate-contract call-off it does not hold.
+    key: JOURNEY_ENABLED_KEY, scopeType: 'CATEGORY', scopeId: 'Indirect',
+    value: [
+      'JP-01', 'JP-02', 'JP-03', 'JP-04', 'JP-05', 'JP-06', 'JP-07',
+      'JP-09', 'JP-10', 'JP-11', 'CJ-01', 'CJ-02',
+    ],
+    isLocked: false, setBy: 'user-ar', setAt: SEED_NOW - 20 * DAY,
+  },
+);
+
+/**
+ * Questionnaire templates are scoped like custom journeys: they accumulate down
+ * the chain, so the tenant library stays available inside a category that adds
+ * its own. The stage weighting resolves narrowest-wins like an ordinary
+ * setting, and Indirect overrides it to lean harder on qualification.
+ */
+CONFIG_SETTINGS.push(
+  {
+    key: TEMPLATE_CUSTOM_KEY, scopeType: 'TENANT', scopeId: 'tenant-udaan',
+    value: TENANT_TEMPLATES, isLocked: false, setBy: 'user-ar', setAt: SEED_NOW - 180 * DAY,
+  },
+  {
+    key: TEMPLATE_CUSTOM_KEY, scopeType: 'CATEGORY', scopeId: 'Indirect',
+    value: CATEGORY_TEMPLATES, isLocked: false, setBy: 'user-ar', setAt: SEED_NOW - 40 * DAY,
+  },
+  {
+    key: TEMPLATE_WEIGHTING_KEY, scopeType: 'TENANT', scopeId: 'tenant-udaan',
+    value: DEFAULT_STAGE_WEIGHTING, isLocked: false, setBy: 'user-ar', setAt: SEED_NOW - 180 * DAY,
+  },
+  {
+    key: TEMPLATE_WEIGHTING_KEY, scopeType: 'CATEGORY', scopeId: 'Indirect',
+    value: [
+      { point: 'INTAKE', weight: 0 },
+      { point: 'RFI', weight: 35 },
+      { point: 'RFP', weight: 45 },
+      { point: 'RFQ', weight: 20 },
+      { point: 'NEGOTIATION', weight: 0 },
+      { point: 'AUCTION', weight: 0 },
+    ],
+    isLocked: false, setBy: 'user-ar', setAt: SEED_NOW - 40 * DAY,
+  },
+);
 
 export const SCOPE_LINEAGE = {
   tenantId: 'tenant-udaan',

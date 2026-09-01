@@ -14,8 +14,9 @@ import { USERS } from '../data/seed';
 
 export type Route =
   | { name: 'board' }
+  | { name: 'requests' }
   | { name: 'intake' }
-  | { name: 'create' }
+  | { name: 'create'; prdId?: string }
   | { name: 'event'; eventId: string; tab?: string }
   | { name: 'list'; stage: 'RFI' | 'RFP' | 'RFQ' | 'AUCTION' }
   | { name: 'approvals' }
@@ -32,7 +33,7 @@ export interface NavItem {
   group?: string;
 }
 
-const SOURCING_ROUTES = ['board', 'intake', 'create', 'event', 'list'];
+const SOURCING_ROUTES = ['board', 'requests', 'intake', 'create', 'event', 'list'];
 
 export function AdminShell({
   route, onNavigate, title, subtitle, breadcrumb, primaryAction, tabs, stageRail, children,
@@ -160,7 +161,11 @@ export function AdminShell({
             {navRow('Procurement', '🛒', { onClick: () => setProcOpen((v) => !v), caret: procOpen ? '▾' : '▸' })}
             {procOpen && !collapsed && (
               <>
-                {navRow('Purchase Request', '▤', { indent: 1 })}
+                {navRow('Purchase Request', '▤', {
+                  indent: 1,
+                  active: isActive('requests'),
+                  onClick: () => onNavigate({ name: 'requests' }),
+                })}
                 {navRow('Sourcing', '◈', {
                   indent: 1,
                   onClick: () => setSourcingOpen((v) => !v),
