@@ -10,7 +10,7 @@ import { Button, Chip, Textarea } from '../design-system/components/primitives';
 import { Modal } from '../design-system/components/domain';
 import { formatCountdown, serverNow } from '../server/clock';
 import { vendorTaskLabel } from '../domain/journeyPatterns';
-import { useStore } from '../store/store';
+import { auctionFor, useStore } from '../store/store';
 import { PORTAL_BIDDER_ID, PRIMARY_EVENT_ID } from '../data/seed';
 import { PortalCard } from './PortalShell';
 import type { PortalRoute } from './PortalShell';
@@ -29,8 +29,9 @@ export function PortalDashboard({ onNavigate }: { onNavigate: (route: PortalRout
   const { state, dispatch } = useStore();
   const event = state.events.find((e) => e.id === PRIMARY_EVENT_ID)!;
   const bidder = state.bidders.find((b) => b.id === PORTAL_BIDDER_ID)!;
-  const auctionLot = state.auction.lots[0];
-  const auctionLive = state.auction.auction.status === 'LIVE' || state.auction.auction.status === 'EXTENDED';
+  const held = auctionFor(state, PRIMARY_EVENT_ID);
+  const auctionLot = held?.lots[0];
+  const auctionLive = held?.auction.status === 'LIVE' || held?.auction.status === 'EXTENDED';
 
   const [declineOpen, setDeclineOpen] = React.useState(false);
   const [declineReason, setDeclineReason] = React.useState('');

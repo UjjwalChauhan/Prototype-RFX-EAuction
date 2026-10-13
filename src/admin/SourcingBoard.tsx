@@ -6,14 +6,15 @@
  * "Auction Live", and the board must show both.
  */
 import React from 'react';
-import { color, money, radius } from '../design-system/tokens';
+import { BASE_CURRENCY, color, money, radius } from '../design-system/tokens';
 import { Button, Chip, Pill, Segmented, TextInput } from '../design-system/components/primitives';
 import { Card, Empty, KpiRow, Table, type Column, type Kpi } from '../design-system/components/layout';
 import { EVENT_STATUS_PRESENTATION } from '../domain/statusMachine';
 import { STAGE_LABELS } from '../domain/journeyPatterns';
 import { JOURNEY_PATTERNS } from '../domain/journeyPatterns';
 import { formatCountdown, serverNow } from '../server/clock';
-import { useStore, biddersForEvent } from '../store/store';
+import { useStore, biddersForEvent, stageEventsOf } from '../store/store';
+import { isStageEvent } from '../domain/stageEvents';
 import type { SourcingEvent } from '../domain/types';
 import type { Route } from './AdminShell';
 
@@ -34,7 +35,12 @@ export function SourcingBoard({ onNavigate }: { onNavigate: (route: Route) => vo
   const [search, setSearch] = React.useState('');
   const [dense, setDense] = React.useState(false);
 
-  let events = state.events;
+  /**
+   * The board lists sourcing events, not the asks under them. An RFI and the
+   * RFP behind it are one piece of work here and four rows would be four times
+   * the same event; each ask is listed in its own section instead.
+   */
+  let events = state.events.filter((e) => !isStageEvent(e));
   if (dataState === 'permission') {
     // A user scoped to their own events sees only those.
     events = events.filter((e) => e.ownerId === state.currentUser.id);
@@ -47,20 +53,24 @@ export function SourcingBoard({ onNavigate }: { onNavigate: (route: Route) => vo
   }
   if (dataState === 'emptyFirst' || dataState === 'emptyFiltered') events = [];
 
-  const liveCount = state.events.filter((e) => e.status === 'AUCTION_LIVE').length;
-  const awaitingAction = state.events.filter(
+  // Counted over sourcing events. An ask carries its parent's value, so
+  // counting both would report the same money four times.
+  const board = state.events.filter((e) => !isStageEvent(e));
+  const liveCount = board.filter((e) => e.status === 'AUCTION_LIVE').length
+    + state.events.filter((e) => isStageEvent(e) && e.status === 'AUCTION_LIVE').length;
+  const awaitingAction = board.filter(
     (e) => e.status === 'PENDING_AWARD_APPROVAL' || e.status === 'RESPONSES_CLOSED' || e.status === 'UNDER_EVALUATION',
   ).length;
-  const valueInFlight = state.events
+  const valueInFlight = board
     .filter((e) => e.status !== 'AWARDED' && e.status !== 'CLOSED' && e.status !== 'CANCELLED')
     .reduce((a, e) => a + e.estimatedValue, 0);
 
   const kpis: Kpi[] = [
-    { icon: '◈', value: String(state.events.filter((e) => e.status !== 'DRAFT' && e.status !== 'CLOSED').length), label: 'Open Events', iconBg: color.brandPrimarySoft, iconFg: color.brandPrimary },
+    { icon: '◈', value: String(board.filter((e) => e.status !== 'DRAFT' && e.status !== 'CLOSED').length), label: 'Open Events', iconBg: color.brandPrimarySoft, iconFg: color.brandPrimary },
     { icon: '⏰', value: String(awaitingAction), label: 'Awaiting My Action', iconBg: color.warningSoft, iconFg: color.warningText },
     { icon: '●', value: String(liveCount), label: 'Auctions Today', iconBg: color.dangerSoft, iconFg: color.dangerText, live: liveCount > 0 },
-    { icon: '$', value: money(valueInFlight, 'USD', { compact: true }), label: 'Value in Flight', iconBg: color.infoSoft, iconFg: color.infoText },
-    { icon: '↓', value: '$812k', label: 'Savings YTD', iconBg: color.successSoft, iconFg: color.successText },
+    { icon: '₹', value: money(valueInFlight, BASE_CURRENCY, { compact: true }), label: 'Value in Flight', iconBg: color.infoSoft, iconFg: color.infoText },
+    { icon: '↓', value: '₹8.1L', label: 'Savings YTD', iconBg: color.successSoft, iconFg: color.successText },
   ];
 
   const columns: Column<SourcingEvent>[] = [
@@ -72,6 +82,19 @@ export function SourcingBoard({ onNavigate }: { onNavigate: (route: Route) => vo
             <span style={{ fontSize: 12.5, fontWeight: 600, color: color.brandPrimary }}>{event.eventNumber}</span>
             {event.side === 'SELL' && <Chip tone="purple" title="Sell-side: highest bid wins">SELL</Chip>}
             {event.parentEventId && <Chip tone="neutral" title="Re-auction lineage">re-auction</Chip>}
+            {(() => {
+              // What this event actually produced, so the board says whether a
+              // journey turned into asks without having to open it.
+              const asks = stageEventsOf(state, event.id);
+              return asks.length === 0 ? null : (
+                <Chip
+                  tone="info"
+                  title={asks.map((a) => `${a.eventNumber} (${STAGE_LABELS[a.currentStage]})`).join(' · ')}
+                >
+                  {asks.length} {asks.length === 1 ? 'ask' : 'asks'}
+                </Chip>
+              );
+            })()}
           </div>
           <div style={{ fontSize: 12.5, color: color.textPrimary, marginTop: 2 }}>{event.title}</div>
         </div>

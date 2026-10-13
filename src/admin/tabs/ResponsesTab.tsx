@@ -16,39 +16,136 @@ import {
   SealedEnvelopeError, projectCommercial, projectTechnical,
   unlockCommercial, type ViewerContext,
 } from '../../server/envelopeGuard';
-import { useStore, biddersForEvent } from '../../store/store';
+import { optionsOf } from '../../domain/questionTypes';
+import { useStore, biddersForEvent, responsesForEvent } from '../../store/store';
 import { COUNTERPARTY_NAMES, LINE_ITEMS, QUESTIONNAIRE } from '../../data/seed';
-import type { Envelope, EventBidder } from '../../domain/types';
+import type { Envelope, EventBidder, Question } from '../../domain/types';
+
+/**
+ * An answer, as the buyer reads it rather than as it is stored.
+ *
+ * A multi-select arrives as the ids of the options chosen, and printing those
+ * put `qt-001-q6-opt-2,qt-001-q6-opt-3` on the buyer's screen where the names
+ * of three regions belonged. A supplier's answer the buyer cannot read is a
+ * response they have not really received.
+ */
+function readAnswer(
+  question: Question, value: unknown, hasAttachment: boolean,
+): string {
+  if (value === null || value === undefined || value === '') {
+    // An answer given as a document is an answer. Saying "not answered" above
+    // the filename of the thing they sent is the opposite of true.
+    return hasAttachment ? 'Answered with the document below' : '— not answered';
+  }
+  if (typeof value === 'boolean') return value ? 'Yes' : 'No';
+
+  const options = optionsOf({ type: question.type, config: question.config ?? {} });
+  if (options.length > 0) {
+    const chosen = String(value).split(',').map((part) => part.trim()).filter(Boolean);
+    const labelled = chosen.map(
+      (id) => options.find((option) => option.id === id)?.label ?? id,
+    );
+    if (labelled.length > 0) return labelled.join(', ');
+  }
+  return String(value);
+}
+
+/** A supplier who has sent nothing. There is no envelope, so there is no status. */
+function Awaited() {
+  return (
+    <span style={{ fontSize: 11.5, color: color.textMuted }}>
+      nothing sent
+    </span>
+  );
+}
 
 export function ResponsesTab({ eventId }: { eventId: string }) {
   const { state } = useStore();
   const event = state.events.find((e) => e.id === eventId)!;
   const bidders = biddersForEvent(state, eventId);
-  const responses = state.responses.filter((r) => r.eventId === eventId);
+  const responses = responsesForEvent(state, eventId);
 
   /**
-   * Envelopes live locally here so the unlock can be demonstrated end to end.
-   * In production they are rows, and the seal is enforced at the data layer.
+   * The questions this event actually asked.
+   *
+   * Taken from the event's own questionnaires — the ones shaped in the Create
+   * Event wizard and answered in the supplier portal — so an answer arriving
+   * from a supplier can be shown against the question that produced it. The
+   * seeded set is the fallback for the demonstration event, which predates
+   * event-level questionnaires.
    */
-  const [envelopes, setEnvelopes] = React.useState<Envelope[]>(() =>
-    bidders.flatMap((bidder) => [
-      {
-        id: `env-tech-${bidder.id}`, eventId, bidderId: bidder.id, kind: 'TECHNICAL' as const,
-        status: 'SUBMITTED' as const, sealed: false,
-        submittedAt: Date.now() - 5 * 86_400_000, unlockedAt: null, unlockedBy: null, witnesses: [],
-      },
-      {
-        id: `env-comm-${bidder.id}`, eventId, bidderId: bidder.id, kind: 'COMMERCIAL' as const,
-        status: 'SEALED' as const,
-        // Sealed while the event runs two envelopes.
-        sealed: event.envelopeMode === 'TWO_ENVELOPE',
-        submittedAt: Date.now() - 5 * 86_400_000, unlockedAt: null, unlockedBy: null, witnesses: [],
-      },
-    ]),
+  const questions = React.useMemo(() => {
+    const family = new Set([eventId, ...state.events.filter((e) => e.parentEventId === eventId).map((e) => e.id)]);
+    const own = state.questionnaires
+      .filter((q) => family.has(q.eventId))
+      .flatMap((q) => q.questions);
+    return own.length > 0 ? own : QUESTIONNAIRE.questions;
+  }, [state.questionnaires, state.events, eventId]);
+
+  /** Who has actually answered. Everything on this screen turns on it. */
+  const responded = React.useMemo(
+    () => new Set(responses.filter((r) => r.submittedAt !== null).map((r) => r.bidderId)),
+    [responses],
   );
 
+  /**
+   * The envelopes, derived from what has actually arrived.
+   *
+   * One per bidder who has submitted, and none for a bidder who has not.
+   * Building them for the whole shortlist put a "Submitted" envelope against
+   * four suppliers who had sent nothing, on the same row as "not submitted" —
+   * a buyer reading that concluded the responses were there and the screen
+   * would not show them.
+   *
+   * Derived rather than held in an effect, so the first paint is already
+   * right. The only thing that is state here is the unlock, because that is
+   * the one fact this screen creates rather than reads.
+   */
+  const [unlocked, setUnlocked] = React.useState<Record<string, {
+    at: number; by: string; witnesses: string[];
+  }>>({});
+
+  const envelopes = React.useMemo<Envelope[]>(() => {
+    const twoEnvelope = event.envelopeMode === 'TWO_ENVELOPE';
+    return responses
+      .filter((response) => response.submittedAt !== null)
+      .flatMap((response) => {
+        const bidderId = response.bidderId;
+        const open = unlocked[`env-comm-${bidderId}`];
+        return [
+          {
+            id: `env-tech-${bidderId}`, eventId, bidderId, kind: 'TECHNICAL' as const,
+            status: 'SUBMITTED' as const, sealed: false,
+            submittedAt: response.submittedAt, unlockedAt: null, unlockedBy: null,
+            witnesses: [] as string[],
+          },
+          {
+            id: `env-comm-${bidderId}`, eventId, bidderId, kind: 'COMMERCIAL' as const,
+            status: (!twoEnvelope || open ? 'UNLOCKED' : 'SEALED') as Envelope['status'],
+            sealed: twoEnvelope && open === undefined,
+            submittedAt: response.submittedAt,
+            unlockedAt: open?.at ?? null,
+            unlockedBy: open?.by ?? null,
+            witnesses: open?.witnesses ?? [],
+          },
+        ];
+      });
+  }, [responses, unlocked, eventId, event.envelopeMode]);
+
   const [unlockOpen, setUnlockOpen] = React.useState(false);
-  const [selectedBidderId, setSelectedBidderId] = React.useState(bidders[0]?.id ?? '');
+  /**
+   * Opens on a supplier who has answered.
+   *
+   * Defaulting to the first row landed the buyer on "No response submitted"
+   * whenever the first supplier alphabetically had not replied — which reads
+   * as "there are no responses" rather than "not this one".
+   */
+  const [chosenBidderId, setChosenBidderId] = React.useState<string | null>(null);
+  const selectedBidderId = chosenBidderId
+    ?? bidders.find((b) => responded.has(b.id))?.id
+    ?? bidders[0]?.id
+    ?? '';
+  const setSelectedBidderId = setChosenBidderId;
 
   const viewer: ViewerContext = {
     userId: state.currentUser.id,
@@ -62,21 +159,23 @@ export function ResponsesTab({ eventId }: { eventId: string }) {
   const canUnlock = state.currentUser.permissions.includes('unlock_commercial');
 
   const doUnlock = () => {
-    setEnvelopes((current) =>
-      current.map((envelope) => {
-        if (envelope.kind !== 'COMMERCIAL' || !envelope.sealed) return envelope;
-        const result = unlockCommercial({
-          envelope,
-          // Witnessed unlock: two authorised users confirm, and both are recorded.
-          mode: 'MANUAL_WITH_WITNESS',
-          actorId: state.currentUser.id,
-          witnessIds: ['user-mp'],
-          permissions: state.currentUser.permissions,
-          eventId,
-        });
-        return result.envelope;
-      }),
-    );
+    const opened: Record<string, { at: number; by: string; witnesses: string[] }> = {};
+    for (const envelope of envelopes) {
+      if (envelope.kind !== 'COMMERCIAL' || !envelope.sealed) continue;
+      const result = unlockCommercial({
+        envelope,
+        // Witnessed unlock: two authorised users confirm, and both are recorded.
+        mode: 'MANUAL_WITH_WITNESS',
+        actorId: state.currentUser.id,
+        witnessIds: ['user-mp'],
+        permissions: state.currentUser.permissions,
+        eventId,
+      });
+      opened[envelope.id] = {
+        at: result.unlockedAt, by: state.currentUser.id, witnesses: ['user-mp'],
+      };
+    }
+    setUnlocked((current) => ({ ...current, ...opened }));
     setUnlockOpen(false);
   };
 
@@ -95,14 +194,18 @@ export function ResponsesTab({ eventId }: { eventId: string }) {
     {
       key: 'technical', header: 'Technical envelope',
       render: (bidder) => {
-        const envelope = envelopes.find((e) => e.bidderId === bidder.id && e.kind === 'TECHNICAL')!;
+        const envelope = envelopes.find((e) => e.bidderId === bidder.id && e.kind === 'TECHNICAL');
+        // No envelope because nothing was sent. Saying so beats a status pill
+        // describing a document that does not exist.
+        if (!envelope) return <Awaited />;
         return <Pill presentation={ENVELOPE_STATUS_PRESENTATION[envelope.status]} size="small" />;
       },
     },
     {
       key: 'commercial', header: 'Commercial envelope',
       render: (bidder) => {
-        const envelope = envelopes.find((e) => e.bidderId === bidder.id && e.kind === 'COMMERCIAL')!;
+        const envelope = envelopes.find((e) => e.bidderId === bidder.id && e.kind === 'COMMERCIAL');
+        if (!envelope) return <Awaited />;
         return (
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
             <Pill presentation={ENVELOPE_STATUS_PRESENTATION[envelope.status]} size="small" />
@@ -129,7 +232,12 @@ export function ResponsesTab({ eventId }: { eventId: string }) {
     {
       key: 'actions', header: '', width: '110px',
       render: (bidder) => (
-        <Button size="small" variant="secondary" onClick={() => setSelectedBidderId(bidder.id)}>
+        <Button
+          size="small"
+          variant={bidder.id === selectedBidderId ? 'primary' : 'secondary'}
+          disabled={!responded.has(bidder.id)}
+          onClick={() => setSelectedBidderId(bidder.id)}
+        >
           Open
         </Button>
       ),
@@ -144,7 +252,7 @@ export function ResponsesTab({ eventId }: { eventId: string }) {
 
   const technicalProjection = selectedResponse && selectedBidder
     ? projectTechnical(
-        selectedResponse, QUESTIONNAIRE.questions,
+        selectedResponse, questions,
         COUNTERPARTY_NAMES[selectedBidder.counterpartyId], selectedBidder.maskedLabel, viewer,
       )
     : null;
@@ -155,7 +263,7 @@ export function ResponsesTab({ eventId }: { eventId: string }) {
   if (selectedResponse && selectedBidder && commercialEnvelope) {
     try {
       commercialProjection = projectCommercial(
-        selectedResponse, QUESTIONNAIRE.questions, commercialEnvelope,
+        selectedResponse, questions, commercialEnvelope,
         COUNTERPARTY_NAMES[selectedBidder.counterpartyId], viewer,
       );
     } catch (error) {
@@ -191,7 +299,17 @@ export function ResponsesTab({ eventId }: { eventId: string }) {
         </ValidationBanner>
       )}
 
-      <Card padded={false} title="Responses" hint="Envelope status per bidder. Technical and commercial move independently.">
+      <Card
+        padded={false}
+        title="Responses"
+        hint={
+          bidders.length === 0
+            ? 'Nobody has been invited to this ask yet.'
+            : responded.size === 0
+              ? `Nothing has come in yet. ${bidders.length} supplier${bidders.length === 1 ? ' has' : 's have'} been invited.`
+              : `${responded.size} of ${bidders.length} have answered. Technical and commercial envelopes move independently.`
+        }
+      >
         <Table columns={summaryColumns} rows={bidders} rowKey={(b) => b.id} />
       </Card>
 
@@ -206,13 +324,13 @@ export function ResponsesTab({ eventId }: { eventId: string }) {
             ) : (
               <div className="rfx-stack" style={{ gap: 11 }}>
                 {technicalProjection.answers.map((answer) => {
-                  const question = QUESTIONNAIRE.questions.find((q) => q.id === answer.questionId);
+                  const question = questions.find((q) => q.id === answer.questionId);
                   if (!question) return null;
                   return (
                     <div key={answer.questionId} style={{ borderBottom: `1px solid ${color.border}`, paddingBottom: 9 }}>
                       <div style={{ fontSize: 11.5, color: color.textSecondary }}>{question.title}</div>
                       <div style={{ fontSize: 13, fontWeight: 500, marginTop: 3 }}>
-                        {String(answer.value)}
+                        {readAnswer(question, answer.value, Boolean(answer.attachmentName))}
                       </div>
                       {answer.attachmentName && (
                         <div style={{ fontSize: 11, color: color.brandPrimary, marginTop: 3 }}>
@@ -275,7 +393,7 @@ export function ResponsesTab({ eventId }: { eventId: string }) {
                   </table>
                 </div>
                 {commercialProjection.answers.map((answer) => {
-                  const question = QUESTIONNAIRE.questions.find((q) => q.id === answer.questionId);
+                  const question = questions.find((q) => q.id === answer.questionId);
                   return (
                     <div key={answer.questionId} style={{ fontSize: 12 }}>
                       <span style={{ color: color.textSecondary }}>{question?.title}: </span>

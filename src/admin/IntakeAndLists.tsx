@@ -9,14 +9,14 @@
  * events whose current stage is RFQ, not a separate RFQ table.
  */
 import React from 'react';
-import { color, money, radius } from '../design-system/tokens';
+import { BASE_CURRENCY, color, money, radius } from '../design-system/tokens';
 import { Button, Chip, Pill, Segmented, TextInput } from '../design-system/components/primitives';
 import { Card, Empty, KpiRow, Table, type Column, type Kpi } from '../design-system/components/layout';
 import { AgentCard, ValidationBanner } from '../design-system/components/domain';
 import { EVENT_STATUS_PRESENTATION } from '../domain/statusMachine';
 import { JOURNEY_PATTERNS, STAGE_LABELS } from '../domain/journeyPatterns';
 import { formatCountdown, serverNow } from '../server/clock';
-import { biddersForEvent, useStore } from '../store/store';
+import { biddersForEvent, responsesForEvent, useStore } from '../store/store';
 import type { SourcingEvent, Stage } from '../domain/types';
 import type { Route } from './AdminShell';
 
@@ -78,7 +78,7 @@ export function IntakeWorkbench({ onNavigate }: { onNavigate: (route: Route) => 
 
   const kpis: Kpi[] = [
     { icon: '▤', value: String(PR_LINES.length), label: 'Unsourced lines', iconBg: color.brandPrimarySoft, iconFg: color.brandPrimary },
-    { icon: '$', value: money(PR_LINES.reduce((a, l) => a + (l.indicativePrice ?? 0) * l.quantity, 0), 'USD', { compact: true }), label: 'Value awaiting sourcing', iconBg: color.infoSoft, iconFg: color.infoText },
+    { icon: '₹', value: money(PR_LINES.reduce((a, l) => a + (l.indicativePrice ?? 0) * l.quantity, 0), BASE_CURRENCY, { compact: true }), label: 'Value awaiting sourcing', iconBg: color.infoSoft, iconFg: color.infoText },
     { icon: '⧉', value: String(duplicateCodes.length), label: 'Consolidation opportunities', iconBg: color.accentPurpleSoft, iconFg: color.accentPurpleText },
     { icon: '◔', value: String(PR_LINES.filter((l) => l.hasVendorQuote).length), label: 'Lines with a vendor quote', iconBg: color.warningSoft, iconFg: color.warningText },
   ];
@@ -249,8 +249,8 @@ export function IntakeWorkbench({ onNavigate }: { onNavigate: (route: Route) => 
                 : 'No consolidation opportunity in the current selection.'
             }
             evidence={[
-              { label: 'PR-2024-0131 line 1', detail: '4,000 reams at an indicative $8.90' },
-              { label: 'PR-2024-0134 line 1', detail: '2,200 reams at an indicative $9.10' },
+              { label: 'PR-2024-0131 line 1', detail: '4,000 reams at an indicative ₹8.90' },
+              { label: 'PR-2024-0134 line 1', detail: '2,200 reams at an indicative ₹9.10' },
               { label: '6 prior events', detail: 'Indirect / paper, average 4.1% saving' },
             ]}
             onAccept={() => setSelected(['prl-1', 'prl-2'])}
@@ -329,12 +329,33 @@ export function StageList({
   const columns: Column<SourcingEvent>[] = [
     {
       key: 'number', header: 'Event', width: '250px',
-      render: (event) => (
-        <div>
-          <div style={{ fontSize: 12.5, fontWeight: 600, color: color.brandPrimary }}>{event.eventNumber}</div>
-          <div style={{ fontSize: 12.5, marginTop: 2 }}>{event.title}</div>
-        </div>
-      ),
+      render: (event) => {
+        // An ask says which sourcing event raised it. Without that the section
+        // reads as a flat list of unrelated tenders.
+        const parent = event.parentEventId === null
+          ? null
+          : state.events.find((e) => e.id === event.parentEventId);
+        return (
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 12.5, fontWeight: 600, color: color.brandPrimary }}>
+                {event.eventNumber}
+              </span>
+              {event.status === 'DRAFT' && parent && (
+                <Chip tone="neutral" title="Prepared and scheduled; it goes out when the ask before it closes.">
+                  planned
+                </Chip>
+              )}
+            </div>
+            <div style={{ fontSize: 12.5, marginTop: 2 }}>{event.title}</div>
+            {parent && (
+              <div style={{ fontSize: 11, color: color.textSecondary, marginTop: 2 }}>
+                under {parent.eventNumber}
+              </div>
+            )}
+          </div>
+        );
+      },
     },
     {
       key: 'pattern', header: 'Pattern',
@@ -364,6 +385,37 @@ export function StageList({
       render: (event) => {
         const bidders = biddersForEvent(state, event.id);
         return bidders.length === 0 ? <span style={{ color: color.textMuted }}>—</span> : String(bidders.length);
+      },
+    },
+    {
+      /**
+       * What has actually come back.
+       *
+       * The invited count says who was asked; on its own it left a buyer with
+       * no way to tell from this section whether anybody had answered, which
+       * is the one thing they open an RFI list to find out. An auction is
+       * bid in the room rather than answered on a form, so it is spared the
+       * column.
+       */
+      key: 'responses', header: 'Responses', numeric: true,
+      render: (event) => {
+        const invited = biddersForEvent(state, event.id).length;
+        if (stage === 'AUCTION' || invited === 0) {
+          return <span style={{ color: color.textMuted }}>—</span>;
+        }
+        const back = responsesForEvent(state, event.id)
+          .filter((response) => response.submittedAt !== null).length;
+        return (
+          <span
+            style={{
+              fontSize: 12, fontVariantNumeric: 'tabular-nums',
+              color: back === 0 ? color.textMuted : color.successText, fontWeight: back === 0 ? 400 : 600,
+            }}
+            title={`${back} of ${invited} invited supplier(s) have submitted`}
+          >
+            {back} / {invited}
+          </span>
+        );
       },
     },
     {

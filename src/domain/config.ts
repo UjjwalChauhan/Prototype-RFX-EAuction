@@ -138,9 +138,20 @@ export const CONFIG_DOMAINS = [
   { key: 'audit', label: 'Audit & retention' },
 ] as const;
 
+/**
+ * The currency this tenant buys in.
+ *
+ * One constant rather than a literal at every call site, because a default
+ * spread across a dozen files is a default that only ever half changes — the
+ * board reads in one currency and the line items in another, and nobody
+ * notices until an approver adds up two numbers that were never comparable.
+ */
+export const BASE_CURRENCY = 'INR';
+
 /** Tenant-level defaults, used as the fallback layer for resolution. */
 export const TENANT_DEFAULTS: Record<string, unknown> = {
   'event.side': 'BUY',
+  'event.currency': BASE_CURRENCY,
   'event.corrigendum_reopens_deadline': true,
   'event.gate_documents_on_acceptance': true,
   'evaluation.envelope_mode': 'TWO_ENVELOPE',

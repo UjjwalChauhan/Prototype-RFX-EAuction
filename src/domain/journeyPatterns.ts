@@ -17,6 +17,13 @@ export const WIZARD_AUCTION = 'Auction';
 export const WIZARD_TIMELINE = 'Timeline';
 export const WIZARD_REVIEW = 'Review';
 
+/**
+ * Every pattern that asks a supplier for anything carries a Terms step.
+ *
+ * Publishing is blocked when an ask goes out with no terms attached, so a
+ * pattern with vendor input points and no step to attach them at cannot be
+ * published at all. `journeyPatterns.test.ts` holds that invariant.
+ */
 export const JOURNEY_PATTERNS: Record<JourneyPatternId, JourneyPattern> = {
   'JP-01': {
     id: 'JP-01', name: 'Direct Auction from PR',
@@ -24,7 +31,7 @@ export const JOURNEY_PATTERNS: Record<JourneyPatternId, JourneyPattern> = {
     stages: ['INTAKE', 'AUCTION', 'AWARD', 'APPROVAL'],
     vendorInputPoints: ['INTAKE', 'AUCTION'],
     side: 'BUY',
-    wizardSteps: [WIZARD_BASICS, WIZARD_ITEMS, WIZARD_BIDDERS, WIZARD_AUCTION, WIZARD_REVIEW],
+    wizardSteps: [WIZARD_BASICS, WIZARD_ITEMS, WIZARD_BIDDERS, WIZARD_TERMS, WIZARD_AUCTION, WIZARD_REVIEW],
     typicalDuration: '10 min', serves: 'Speed',
   },
   'JP-02': {
@@ -33,7 +40,7 @@ export const JOURNEY_PATTERNS: Record<JourneyPatternId, JourneyPattern> = {
     stages: ['INTAKE', 'RFQ', 'EVALUATION', 'AWARD', 'APPROVAL'],
     vendorInputPoints: ['RFQ'],
     side: 'BUY',
-    wizardSteps: [WIZARD_BASICS, WIZARD_ITEMS, WIZARD_BIDDERS, WIZARD_QUESTIONNAIRE, WIZARD_TIMELINE, WIZARD_REVIEW],
+    wizardSteps: [WIZARD_BASICS, WIZARD_ITEMS, WIZARD_BIDDERS, WIZARD_QUESTIONNAIRE, WIZARD_TERMS, WIZARD_TIMELINE, WIZARD_REVIEW],
     typicalDuration: '3 days', serves: 'The volume workhorse',
   },
   'JP-03': {
@@ -42,7 +49,7 @@ export const JOURNEY_PATTERNS: Record<JourneyPatternId, JourneyPattern> = {
     stages: ['INTAKE', 'RFQ', 'EVALUATION', 'AUCTION', 'AWARD', 'APPROVAL'],
     vendorInputPoints: ['RFQ', 'AUCTION'],
     side: 'BUY',
-    wizardSteps: [WIZARD_BASICS, WIZARD_ITEMS, WIZARD_BIDDERS, WIZARD_QUESTIONNAIRE, WIZARD_AUCTION, WIZARD_TIMELINE, WIZARD_REVIEW],
+    wizardSteps: [WIZARD_BASICS, WIZARD_ITEMS, WIZARD_BIDDERS, WIZARD_QUESTIONNAIRE, WIZARD_TERMS, WIZARD_AUCTION, WIZARD_TIMELINE, WIZARD_REVIEW],
     typicalDuration: '5 days', serves: 'RFQ sets the field; auction compresses price',
   },
   'JP-04': {
@@ -78,7 +85,7 @@ export const JOURNEY_PATTERNS: Record<JourneyPatternId, JourneyPattern> = {
     stages: ['INTAKE', 'AWARD', 'APPROVAL'],
     vendorInputPoints: ['INTAKE'],
     side: 'BUY',
-    wizardSteps: [WIZARD_BASICS, WIZARD_ITEMS, WIZARD_REVIEW],
+    wizardSteps: [WIZARD_BASICS, WIZARD_ITEMS, WIZARD_TERMS, WIZARD_REVIEW],
     typicalDuration: '1 day', serves: 'Requisitioners already hold quotes',
   },
   'JP-08': {
@@ -96,7 +103,7 @@ export const JOURNEY_PATTERNS: Record<JourneyPatternId, JourneyPattern> = {
     stages: ['INTAKE', 'AUCTION', 'AWARD', 'APPROVAL'],
     vendorInputPoints: ['AUCTION'],
     side: 'BUY',
-    wizardSteps: [WIZARD_BASICS, WIZARD_ITEMS, WIZARD_BIDDERS, WIZARD_AUCTION, WIZARD_REVIEW],
+    wizardSteps: [WIZARD_BASICS, WIZARD_ITEMS, WIZARD_BIDDERS, WIZARD_TERMS, WIZARD_AUCTION, WIZARD_REVIEW],
     typicalDuration: '2 days', serves: 'Short-closed PO balance',
   },
   'JP-10': {
@@ -105,7 +112,7 @@ export const JOURNEY_PATTERNS: Record<JourneyPatternId, JourneyPattern> = {
     stages: ['INTAKE', 'RFQ', 'AUCTION', 'AWARD', 'APPROVAL'],
     vendorInputPoints: ['RFQ', 'AUCTION'],
     side: 'BUY',
-    wizardSteps: [WIZARD_BASICS, WIZARD_ITEMS, WIZARD_BIDDERS, WIZARD_TIMELINE, WIZARD_REVIEW],
+    wizardSteps: [WIZARD_BASICS, WIZARD_ITEMS, WIZARD_BIDDERS, WIZARD_TERMS, WIZARD_TIMELINE, WIZARD_REVIEW],
     typicalDuration: '1 week', serves: 'Contract expiry or index drift',
   },
   'JP-11': {
@@ -114,7 +121,7 @@ export const JOURNEY_PATTERNS: Record<JourneyPatternId, JourneyPattern> = {
     stages: ['INTAKE', 'RFQ', 'AWARD'],
     vendorInputPoints: ['RFQ'],
     side: 'BUY',
-    wizardSteps: [WIZARD_BASICS, WIZARD_ITEMS, WIZARD_BIDDERS, WIZARD_REVIEW],
+    wizardSteps: [WIZARD_BASICS, WIZARD_ITEMS, WIZARD_BIDDERS, WIZARD_TERMS, WIZARD_REVIEW],
     typicalDuration: '4 hours', serves: 'Tail spend',
   },
   'JP-12': {
@@ -123,7 +130,7 @@ export const JOURNEY_PATTERNS: Record<JourneyPatternId, JourneyPattern> = {
     stages: ['INTAKE', 'AUCTION', 'AWARD', 'APPROVAL'],
     vendorInputPoints: ['AUCTION'],
     side: 'SELL',
-    wizardSteps: [WIZARD_BASICS, WIZARD_ITEMS, WIZARD_BIDDERS, WIZARD_AUCTION, WIZARD_REVIEW],
+    wizardSteps: [WIZARD_BASICS, WIZARD_ITEMS, WIZARD_BIDDERS, WIZARD_TERMS, WIZARD_AUCTION, WIZARD_REVIEW],
     typicalDuration: '1 week', serves: 'Scrap and surplus',
   },
   'JP-13': {
@@ -132,7 +139,7 @@ export const JOURNEY_PATTERNS: Record<JourneyPatternId, JourneyPattern> = {
     stages: ['INTAKE', 'RFQ', 'EVALUATION', 'AUCTION', 'AWARD', 'APPROVAL'],
     vendorInputPoints: ['RFQ', 'AUCTION'],
     side: 'SELL',
-    wizardSteps: [WIZARD_BASICS, WIZARD_ITEMS, WIZARD_BIDDERS, WIZARD_QUESTIONNAIRE, WIZARD_AUCTION, WIZARD_TIMELINE, WIZARD_REVIEW],
+    wizardSteps: [WIZARD_BASICS, WIZARD_ITEMS, WIZARD_BIDDERS, WIZARD_QUESTIONNAIRE, WIZARD_TERMS, WIZARD_AUCTION, WIZARD_TIMELINE, WIZARD_REVIEW],
     typicalDuration: '2 weeks', serves: 'Structured sales process',
   },
 };
@@ -209,7 +216,10 @@ export function workspaceTabs(stagesEnabled: Stage[]): string[] {
     tabs.push('Questionnaire');
   }
   if (stagesEnabled.some((s) => s !== 'INTAKE' && s !== 'AWARD' && s !== 'APPROVAL')) {
-    tabs.push('Bidders', 'Terms', 'Clarifications', 'Responses');
+    // Comparison sits next to Responses because that is the order the work
+    // happens in: read what came in, then put it side by side. Timeline sits
+    // first of these, because every one of them has a deadline.
+    tabs.push('Timeline', 'Bidders', 'Terms', 'Clarifications', 'Responses', 'Comparison');
   }
   if (stagesEnabled.includes('EVALUATION')) tabs.push('Evaluation');
   if (stagesEnabled.includes('NEGOTIATION')) tabs.push('Negotiation');

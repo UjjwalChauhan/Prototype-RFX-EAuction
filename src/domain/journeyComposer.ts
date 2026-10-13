@@ -172,7 +172,7 @@ export function customSummary(journey: CustomJourney): JourneySummary {
     side: journey.side,
     stages: normaliseStages(journey.stages),
     vendorInputPoints: journey.vendorInputPoints,
-    wizardSteps: deriveWizardSteps(journey.stages),
+    wizardSteps: deriveWizardSteps(journey.stages, journey.vendorInputPoints),
     duration: estimateDuration(journey.stages),
     serves: journey.description,
     origin: 'CUSTOM',
@@ -196,17 +196,27 @@ export function normaliseStages(stages: Stage[]): Stage[] {
  * and JP-11 trim steps by hand because they optimise for speed — a rate refresh
  * reuses an existing questionnaire, and a spot buy skips the timeline. The
  * composer derives rather than guessing at that intent, and says so.
+ *
+ * The asks are passed in rather than read off the stages because two journeys
+ * can run the same stages and ask the supplier different things: JP-07 takes a
+ * quote at intake, JP-08 calls off a rate contract and asks for nothing.
  */
-export function deriveWizardSteps(stages: Stage[]): string[] {
+export function deriveWizardSteps(
+  stages: Stage[], vendorInputPoints: VendorInputPoint[] = availableVendorPoints(stages),
+): string[] {
   const has = (s: Stage) => stages.includes(s);
   const anyOf = (list: Stage[]) => list.some(has);
 
   const steps: string[] = [WIZARD_BASICS, WIZARD_ITEMS];
   if (anyOf(COMPETITIVE_STAGES)) steps.push(WIZARD_BIDDERS);
   if (anyOf(SOLICITATION_STAGES)) steps.push(WIZARD_QUESTIONNAIRE);
-  // Terms and a weighted evaluation model are worth a step only where the
-  // journey actually negotiates or scores a proposal.
-  if (has('RFP') || has('NEGOTIATION')) steps.push(WIZARD_TERMS, WIZARD_EVALUATION);
+  // Terms belong wherever the journey asks a supplier for anything at all —
+  // a quote at intake and a bid in an auction are both commitments, and
+  // publishing is blocked when an ask goes out with nothing attached. A
+  // weighted evaluation model is narrower: it is worth a step only where the
+  // journey negotiates or scores a proposal.
+  if (vendorInputPoints.length > 0) steps.push(WIZARD_TERMS);
+  if (has('RFP') || has('NEGOTIATION')) steps.push(WIZARD_EVALUATION);
   if (has('AUCTION')) steps.push(WIZARD_AUCTION);
   if (anyOf(SOLICITATION_STAGES)) steps.push(WIZARD_TIMELINE);
   steps.push(WIZARD_REVIEW);

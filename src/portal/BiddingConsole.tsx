@@ -13,17 +13,54 @@ import React from 'react';
 import { color, money, radius } from '../design-system/tokens';
 import { Button, Chip, Field, NumberInput, Toggle } from '../design-system/components/primitives';
 import { Countdown, Modal, TrafficLight, ValidationBanner } from '../design-system/components/domain';
-import { bidderView } from '../server/auctionService';
+import { bidderView, type AuctionState } from '../server/auctionService';
+import type { AuctionLot, Bid, Lot } from '../domain/types';
 import { VISIBILITY_MANIFEST } from '../domain/feedbackPolicy';
-import { improvementLabel } from '../domain/comparator';
-import { useStore } from '../store/store';
-import { COUNTERPARTY_NAMES, PORTAL_BIDDER_ID } from '../data/seed';
+import {
+  MECHANISM_PROFILE, bidderRules, biddingOpen, latestControlEvent,
+} from '../domain/auctionMechanics';
+import { rehearsalBriefing, rehearsalOpen } from '../domain/auctionRehearsal';
+import { activityFeed, progressForBidder } from '../domain/auctionProgress';
+import {
+  ActivityFeed, PriceChart, Stat,
+} from '../design-system/components/auctionProgress';
+import { BidControl, MechanismCaption, MechanismFacts } from './BiddingModes';
+import { auctionsForBidder, useStore } from '../store/store';
+import { COUNTERPARTY_NAMES, PORTAL_BIDDER_ID, PORTAL_COUNTERPARTY_ID } from '../data/seed';
 import { PortalCard } from './PortalShell';
 
-export function BiddingConsole() {
+export function BiddingConsole({
+  counterpartyId, eventId,
+}: { counterpartyId?: string; eventId?: string } = {}) {
   const { state, dispatch } = useStore();
-  const auction = state.auction.auction;
-  const [lotId, setLotId] = React.useState(state.auction.lots[0]?.id ?? '');
+  /**
+   * The auction this supplier is actually in.
+   *
+   * The tenant runs several at once on different mechanisms, so "the auction"
+   * is not a thing the console can assume — and landing a Japanese bidder in an
+   * English console is exactly the failure this screen exists to avoid.
+   */
+  const me = counterpartyId ?? PORTAL_COUNTERPARTY_ID;
+  const mine = auctionsForBidder(state, me);
+  const [chosenEventId, setChosenEventId] = React.useState<string | null>(eventId ?? null);
+  const wanted = chosenEventId ?? eventId;
+  const matched = mine.find((h) => h.auction.eventId === wanted) ?? null;
+  /**
+   * A named room is that room or none.
+   *
+   * Falling back to `mine[0]` when the named auction is not one of theirs put
+   * a supplier who followed a link to auction X inside auction Y — with a
+   * live bid box, on a lot they were never invited to price. Falling back is
+   * only right when no room was named at all.
+   */
+  const held = wanted ? matched : mine[0] ?? null;
+  const auction = held?.auction;
+  const [chosenLotId, setChosenLotId] = React.useState<string | null>(null);
+  const lotId = chosenLotId
+    ?? held?.lots.find((l) => l.status === 'LOT_OPEN')?.id
+    ?? held?.lots[0]?.id
+    ?? '';
+  const setLotId = setChosenLotId;
   const [bidValue, setBidValue] = React.useState('');
   const [confirmOpen, setConfirmOpen] = React.useState(false);
   const [proxyOpen, setProxyOpen] = React.useState(false);
@@ -32,38 +69,100 @@ export function BiddingConsole() {
   const [mobile, setMobile] = React.useState(false);
   const [helpOpen, setHelpOpen] = React.useState(false);
 
-  // The only source of competitive information on this screen.
-  const view = bidderView(state.auction, lotId, PORTAL_BIDDER_ID, COUNTERPARTY_NAMES);
-  const manifest = VISIBILITY_MANIFEST[auction.feedbackPolicy];
+  // The bidder record this supplier holds in *this* auction.
+  const myBidderId = held?.bidders.find(
+    (b) => b.counterpartyId === me,
+  )?.id ?? PORTAL_BIDDER_ID;
 
-  const lot = state.auction.lots.find((l) => l.id === lotId);
-  const lotName = lot ? state.auction.lotDetails[lot.lotId]?.name : '';
-  const live = auction.status === 'LIVE' || auction.status === 'EXTENDED';
-  const paused = auction.status === 'PAUSED';
-  const closed = auction.status === 'CLOSED' || auction.status === 'ABORTED';
+  // The only source of competitive information on this screen.
+  const view = held === null
+    ? null
+    : bidderView(held, lotId, myBidderId, COUNTERPARTY_NAMES);
+  const manifest = auction ? VISIBILITY_MANIFEST[auction.feedbackPolicy] : null;
+
+  const lot = held?.lots.find((l) => l.id === lotId);
+  const lotDetail = lot ? held?.lotDetails[lot.lotId] : undefined;
+  const lotName = lotDetail?.name ?? '';
+  const live = auction?.status === 'LIVE' || auction?.status === 'EXTENDED';
+  const paused = auction?.status === 'PAUSED';
+  const closed = auction?.status === 'CLOSED' || auction?.status === 'ABORTED';
+
+  const currency = state.events.find((e) => e.id === auction?.eventId)?.currency ?? 'INR';
+
+  /**
+   * Whether the buyer has the practice run open.
+   *
+   * Read from the control log rather than a flag, so it is the same fact the
+   * controller's screen is showing. It closes itself once bidding starts —
+   * there is nothing to rehearse in a room that is already running.
+   */
+  const practising = held !== null && !live && !closed && rehearsalOpen(held.controlEvents);
+
+  /** The most recent change to what bidders may see, if there has been one. */
+  const feedbackChange = held === null
+    ? null
+    : latestControlEvent(held.controlEvents, ['FEEDBACK_CHANGED']);
 
   const result = state.lastBidResult;
-  const myResult = result && result.bidderId === PORTAL_BIDDER_ID ? result : null;
+  const myResult = result && result.bidderId === myBidderId ? result : null;
 
-  const place = (confirmed = false) => {
+  const place = (value: number, confirmed = false) => {
+    if (!held) return;
     dispatch({
       type: 'SUBMIT_BID',
+      eventId: held.auction.eventId,
       auctionLotId: lotId,
-      bidderId: PORTAL_BIDDER_ID,
-      bidValue: Number(bidValue),
-      userId: `portal-${PORTAL_BIDDER_ID}`,
+      bidderId: myBidderId,
+      bidValue: value,
+      userId: `portal-${myBidderId}`,
       source: 'PORTAL',
       confirmed,
     });
   };
+
+  /**
+   * A practice bid.
+   *
+   * The same control, the same validator, the same rejection wording — the
+   * only difference is which ledger it lands in. A practice path with gentler
+   * rules would teach the supplier that a bid will be accepted when it will
+   * not, which is worse than no practice at all.
+   */
+  const rehearse = (value: number, confirmed = false) => {
+    if (!held) return;
+    dispatch({
+      type: 'REHEARSE_BID',
+      eventId: held.auction.eventId,
+      auctionLotId: lotId,
+      bidderId: myBidderId,
+      bidValue: value,
+      userId: `portal-${myBidderId}`,
+      confirmed,
+    });
+  };
+
+  /** Why the control is closed, in the supplier's words. */
+  const gate = state.connectionLost
+    ? 'You are offline. Nothing you send now will reach us — a bid placed offline is not a bid.'
+    : auction
+      ? biddingOpen(auction.status).reason
+      : null;
 
   React.useEffect(() => {
     if (myResult?.requiresConfirmation) setConfirmOpen(true);
     if (myResult?.accepted) setBidValue('');
   }, [myResult]);
 
-  const quickSteps = [500, 1_000, 2_500];
-  const currentBid = view.myBestBid ?? lot?.startingPrice ?? 0;
+  if (held === null || auction === undefined || view === null || manifest === null) {
+    return (
+      <PortalCard title="No auction is open for you">
+        <div style={{ fontSize: 14.5, color: color.textSecondary, lineHeight: 1.7 }}>
+          You have not been invited to a live auction. When a buyer schedules one you will get an
+          invitation, a practice run to try it out, and this room will open before it starts.
+        </div>
+      </PortalCard>
+    );
+  }
 
   return (
     <div className="rfx-stack" style={{ gap: 18, maxWidth: mobile ? 390 : undefined, marginInline: mobile ? 'auto' : undefined }}>
@@ -79,25 +178,56 @@ export function BiddingConsole() {
           aria-hidden
           style={{
             width: 10, height: 10, borderRadius: '50%', flexShrink: 0,
-            background: closed ? '#9CA3AF' : paused ? '#FBBF24' : '#EF4444',
+            background: closed ? '#9CA3AF' : paused ? '#FBBF24' : live ? '#EF4444' : '#818CF8',
             animation: live ? 'rfx-pulse 1.2s infinite' : undefined,
           }}
         />
         <div style={{ flex: 1, minWidth: 180 }}>
-          <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: '.06em' }}>
-            {closed ? 'BIDDING CLOSED' : paused ? 'BIDDING PAUSED' : 'BIDDING IS OPEN'}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+            <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: '.06em' }}>
+              {/* A room that has not opened must not announce that it has.
+                  Rooms are now reachable before they start — that is where the
+                  practice run lives — so "bidding is open" has to be earned. */}
+              {closed ? 'BIDDING CLOSED'
+                : paused ? 'BIDDING PAUSED'
+                  : live ? 'BIDDING IS OPEN'
+                    : practising ? 'PRACTICE RUN — BIDDING HAS NOT STARTED'
+                      : 'BIDDING HAS NOT STARTED'}
+            </div>
+            {/* The reference. A supplier ringing about "the packaging one"
+                gets nowhere; this is the string both sides can quote, and it
+                is the auction's own rather than the ask that carries it. */}
+            <span
+              title="Auction reference — quote this in any correspondence"
+              style={{
+                fontSize: 11.5, fontWeight: 600, letterSpacing: '.04em',
+                padding: '2px 8px', borderRadius: 999,
+                background: 'rgba(255,255,255,.16)', fontVariantNumeric: 'tabular-nums',
+              }}
+            >
+              {auction.auctionNumber}
+            </span>
           </div>
           <div style={{ fontSize: 14, marginTop: 4, opacity: 0.85 }}>
-            {/* Plain language. No mechanism jargon. */}
-            {auction.mechanism === 'ENGLISH' && 'Bid whenever you like. Each bid must beat the current leading position.'}
-            {auction.mechanism === 'JAPANESE' && 'Each round, confirm you are staying in — or drop out.'}
-            {auction.mechanism === 'DUTCH' && 'The price moves until someone accepts. The first acceptance ends it.'}
-            {auction.mechanism === 'SEALED_BID' && 'Submit one price. Nothing is revealed until the reveal time.'}
-            {!['ENGLISH', 'JAPANESE', 'DUTCH', 'SEALED_BID'].includes(auction.mechanism) && 'Follow the guidance below to place your bid.'}
+            {/* Plain language, generated from this auction's own rules — the
+                supplier is never shown a caption for a different format. */}
+            <MechanismCaption held={held} />
+          </div>
+          <div style={{ marginTop: 8 }}>
+            <MechanismFacts held={held} />
           </div>
         </div>
         <div style={{ textAlign: 'right' }}>
-          <Countdown closesAt={view.closesAt} size={mobile ? 26 : 30} label="Time left" paused={paused} />
+          {live || paused || closed
+            ? <Countdown closesAt={view.closesAt} size={mobile ? 26 : 30} label="Time left" paused={paused} />
+            : (
+              <Countdown
+                closesAt={auction.startsAt}
+                size={mobile ? 26 : 30}
+                label="Starts in"
+                paused={false}
+              />
+            )}
         </div>
         <Button variant="secondary" size="small" onClick={() => setHelpOpen(true)}>How this works</Button>
       </div>
@@ -122,6 +252,18 @@ export function BiddingConsole() {
         </ValidationBanner>
       )}
 
+      {/* The buyer changed what this supplier can see, while they were
+          bidding. Announced rather than left to be noticed: the panel beside
+          it simply starts showing more, or less, and a supplier who works out
+          for themselves that the rules moved has been treated badly. */}
+      {feedbackChange && (
+        <ValidationBanner tone="warning" title="The buyer changed what you can see">
+          You are now shown <strong>{manifest.label.toLowerCase()}</strong>.{' '}
+          {feedbackChange.reason} Changed at{' '}
+          {new Date(feedbackChange.at).toLocaleTimeString()}.
+        </ValidationBanner>
+      )}
+
       {myResult && !myResult.requiresConfirmation && (
         <ValidationBanner
           tone={myResult.accepted ? 'success' : 'error'}
@@ -132,9 +274,53 @@ export function BiddingConsole() {
         </ValidationBanner>
       )}
 
+      {mine.length > 1 && (
+        <PortalCard
+          title={`You are in ${mine.length} auctions`}
+          hint="They run on different rules. This room is showing one of them — switch with the buttons below."
+        >
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+            {mine.map((other) => {
+              const otherEvent = state.events.find((e) => e.id === other.auction.eventId);
+              const active = other.auction.eventId === held.auction.eventId;
+              const reference = other.auction.auctionNumber;
+              return (
+                <button
+                  key={other.auction.id}
+                  type="button"
+                  onClick={() => { setChosenEventId(other.auction.eventId); setChosenLotId(null); }}
+                  style={{
+                    border: `1px solid ${active ? color.brandPrimary : color.border}`,
+                    background: active ? color.brandPrimarySoft : '#fff',
+                    color: active ? color.brandPrimary : color.textBody,
+                    borderRadius: radius.card, padding: '11px 15px', cursor: 'pointer',
+                    textAlign: 'left', minWidth: 200,
+                  }}
+                >
+                  <div style={{ fontSize: 14.5, fontWeight: active ? 700 : 500 }}>
+                    {otherEvent?.title ?? other.auction.eventId}
+                  </div>
+                  <div style={{ fontSize: 12, color: color.textSecondary, marginTop: 3 }}>
+                    <span style={{ fontVariantNumeric: 'tabular-nums', fontWeight: 600 }}>
+                      {reference}
+                    </span>
+                    {' · '}
+                    {MECHANISM_PROFILE[other.auction.mechanism].label}
+                    {' · '}
+                    {other.auction.status === 'LIVE' || other.auction.status === 'EXTENDED'
+                      ? 'open now'
+                      : other.auction.status.toLowerCase().replace('_', ' ')}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </PortalCard>
+      )}
+
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-        {state.auction.lots.map((auctionLot) => {
-          const detail = state.auction.lotDetails[auctionLot.lotId];
+        {held.lots.map((auctionLot) => {
+          const detail = held.lotDetails[auctionLot.lotId];
           const open = auctionLot.status === 'LOT_OPEN';
           return (
             <button
@@ -160,118 +346,82 @@ export function BiddingConsole() {
 
       <div className={mobile ? 'rfx-stack' : 'rfx-side'} style={{ gap: 16 }}>
         <div className="rfx-stack" style={{ gap: 16 }}>
+          {/* The practice run, while the buyer has it open and the room is
+              not yet live. It replaces nothing: it sits above the real
+              controls so what is practice and what is not is never in doubt. */}
+          {practising && lot && (
+            <RehearsalPanel
+              held={held}
+              lot={lot}
+              lotDetail={lotDetail}
+              bidderId={myBidderId}
+              currency={currency}
+              practiceBids={state.practiceBids.filter(
+                (b) => b.auctionLotId === lotId && b.bidderId === myBidderId,
+              )}
+              rehearse={rehearse}
+            />
+          )}
+
           {/* ============ Position panel — manifest-driven ============ */}
           <PortalCard title="Where you stand" hint={`The buyer has chosen to show you: ${manifest.label.toLowerCase()}.`}>
             <PositionPanel view={view} amberBandPct={auction.trafficAmberBandPct} />
           </PortalCard>
 
-          {/* ============ Bid entry ============ */}
-          <PortalCard
-            title={`Place a bid on ${lotName}`}
-            hint={
-              auction.transformation !== 'NONE' && view.bidToBeat !== null
-                ? 'The figure to beat is shown in your own terms.'
-                : undefined
-            }
-          >
-            {lot?.status !== 'LOT_OPEN' ? (
+          {/* ============ Bid entry — chosen by the mechanism ============ */}
+          {lot?.status !== 'LOT_OPEN' ? (
+            <PortalCard title={`Bidding on ${lotName}`}>
               <div style={{ fontSize: 14.5, color: color.textSecondary }}>
                 This lot is not open yet. It opens{' '}
                 {lot?.opensAt ? new Date(lot.opensAt).toLocaleTimeString() : 'shortly'} — we will
-                alert you.
+                alert you, so you do not have to watch this page.
               </div>
-            ) : (
-              <div className="rfx-stack" style={{ gap: 14 }}>
-                {view.bidToBeat !== null && (
-                  <div
-                    style={{
-                      background: color.brandPrimarySoft, borderRadius: radius.card,
-                      padding: '14px 16px', display: 'flex', alignItems: 'center',
-                      justifyContent: 'space-between', gap: 14, flexWrap: 'wrap',
-                    }}
-                  >
-                    <div>
-                      <div style={{ fontSize: 12.5, color: color.textSecondary }}>To take the lead, bid</div>
-                      <div style={{ fontSize: 24, fontWeight: 700, fontVariantNumeric: 'tabular-nums', color: color.brandPrimary }}>
-                        {money(view.bidToBeat, 'USD')} or better
-                      </div>
-                    </div>
-                    {view.requiredImprovement !== null && view.requiredImprovement > 0 && (
-                      <div style={{ textAlign: 'right' }}>
-                        <div style={{ fontSize: 12.5, color: color.textSecondary }}>
-                          That is a {improvementLabel(auction.side)} of
-                        </div>
-                        <div style={{ fontSize: 17, fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>
-                          {money(view.requiredImprovement, 'USD')}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                )}
+            </PortalCard>
+          ) : (
+            <BidControl
+              held={held}
+              view={view}
+              lot={lot}
+              lotDetail={lotDetail}
+              bidderId={myBidderId}
+              currency={currency}
+              place={place}
+              enabled={live === true && gate === null}
+              disabledReason={gate}
+            />
+          )}
 
-                <Field
-                  label="Your bid"
-                  hint={`Minimum ${improvementLabel(auction.side)} is ${auction.antiGaming.minDecrement}${auction.antiGaming.minDecrementType === 'PCT' ? '%' : ''} on the leading position.`}
-                >
-                  <NumberInput
-                    value={bidValue}
-                    onChange={(e) => setBidValue(e.target.value)}
-                    disabled={state.connectionLost || paused || !live}
-                    placeholder={view.bidToBeat !== null ? String(Math.round(view.bidToBeat)) : ''}
-                    style={{ fontSize: 22, padding: '14px 14px', fontWeight: 700 }}
-                  />
-                </Field>
+          {auction.proxyBidding && MECHANISM_PROFILE[auction.mechanism].proxySupported
+            && lot?.status === 'LOT_OPEN' && (
+            <PortalCard
+              title="Let us bid for you"
+              hint="Set the best price you are willing to reach. We bid in the smallest steps needed to hold your position, and stop at your limit."
+            >
+              <Button variant="secondary" onClick={() => setProxyOpen(true)}>
+                Set up automatic bidding
+              </Button>
+            </PortalCard>
+          )}
 
-                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                  {quickSteps.map((step) => (
-                    <Button
-                      key={step}
-                      variant="secondary"
-                      disabled={state.connectionLost || paused || !live}
-                      onClick={() =>
-                        setBidValue(String(auction.side === 'BUY' ? currentBid - step : currentBid + step))
-                      }
-                    >
-                      {auction.side === 'BUY' ? '−' : '+'}{money(step, 'USD')}
-                    </Button>
-                  ))}
-                  <Button
-                    variant="secondary"
-                    disabled={state.connectionLost || paused || !live}
-                    onClick={() =>
-                      setBidValue(String(Math.round(auction.side === 'BUY' ? currentBid * 0.99 : currentBid * 1.01)))
-                    }
-                  >
-                    {auction.side === 'BUY' ? '−' : '+'}1%
-                  </Button>
-                </div>
-
-                <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-                  <Button
-                    variant="primary"
-                    disabled={!bidValue || state.connectionLost || paused || !live}
-                    onClick={() => place(false)}
-                    style={{ fontSize: 15, padding: '12px 22px' }}
-                  >
-                    Place bid
-                  </Button>
-                  {auction.proxyBidding && (
-                    <Button variant="secondary" onClick={() => setProxyOpen(true)}>
-                      Set up automatic bidding
-                    </Button>
-                  )}
-                </div>
-
-                <div style={{ fontSize: 12.5, color: color.textSecondary, lineHeight: 1.7 }}>
-                  A bid cannot be withdrawn, and you cannot bid against your own leading bid. Bids in the
-                  last {auction.antiGaming.softCloseTriggerSec / 60} minutes extend the clock for everyone.
-                </div>
-              </div>
-            )}
+          <PortalCard title="The rules of this auction" hint="Generated from how the buyer configured it — the same words their own screen shows.">
+            <ul style={{ margin: 0, paddingLeft: 18, fontSize: 14, lineHeight: 1.8 }}>
+              {bidderRules(auction).map((rule) => <li key={rule}>{rule}</li>)}
+            </ul>
           </PortalCard>
         </div>
 
         <div className="rfx-stack" style={{ gap: 16 }}>
+          {/* The auction over time, cut to what this policy permits. Absent
+              before the room opens — there is nothing to plot yet. */}
+          {(live || paused || closed) && (
+            <BidderProgressPanel
+              held={held}
+              lotId={lotId}
+              bidderId={myBidderId}
+              currency={currency}
+            />
+          )}
+
           {/* Your own bids — always permitted, whatever the policy. */}
           <PortalCard title="Your bids">
             {view.myBidHistory.length === 0 ? (
@@ -290,7 +440,7 @@ export function BiddingConsole() {
                     }}
                   >
                     <span style={{ fontSize: 15, fontWeight: i === 0 ? 700 : 400, fontVariantNumeric: 'tabular-nums' }}>
-                      {money(bid.value, 'USD')}
+                      {money(bid.value)}
                     </span>
                     <span style={{ fontSize: 12.5, color: color.textSecondary, fontVariantNumeric: 'tabular-nums' }}>
                       {new Date(bid.at).toLocaleTimeString()}
@@ -357,7 +507,7 @@ export function BiddingConsole() {
         open={confirmOpen}
         title="That is a big move — confirm it"
         onClose={() => { setConfirmOpen(false); dispatch({ type: 'CLEAR_BID_RESULT' }); }}
-        onConfirm={() => { place(true); setConfirmOpen(false); }}
+        onConfirm={() => { place(Number(bidValue) || 0, true); setConfirmOpen(false); }}
         confirmLabel="Yes, place this bid"
       >
         <p style={{ margin: '0 0 12px', fontSize: 14.5, lineHeight: 1.7 }}>
@@ -369,7 +519,7 @@ export function BiddingConsole() {
             padding: '14px 16px', fontSize: 14, lineHeight: 1.7,
           }}
         >
-          Bidding <strong>{money(Number(bidValue) || 0, 'USD')}</strong> is a large improvement on your
+          Bidding <strong>{money(Number(bidValue) || 0)}</strong> is a large improvement on your
           current position. A bid cannot be withdrawn once placed — check the figure.
         </div>
       </Modal>
@@ -439,6 +589,231 @@ export function BiddingConsole() {
  * the value actually being there, so a policy change cannot leak a number
  * through a stale render path.
  */
+/**
+ * The practice room.
+ *
+ * A supplier invited to their first Japanese auction currently learns the
+ * format while real money is on the clock. Here they learn it against the
+ * same configuration, the same minimum improvement and the same bounds, with
+ * the one difference that nothing counts.
+ *
+ * It deliberately uses `BidControl` — the very control they will use for
+ * real — rather than a simplified stand-in. The point is not to explain the
+ * mechanism, it is to have already used it.
+ */
+function RehearsalPanel({
+  held, lot, lotDetail, bidderId, currency, practiceBids, rehearse,
+}: {
+  held: AuctionState;
+  lot: AuctionLot;
+  lotDetail: Lot | undefined;
+  bidderId: string;
+  currency: string;
+  practiceBids: Bid[];
+  rehearse: (value: number, confirmed?: boolean) => void;
+}) {
+  const briefing = rehearsalBriefing(held.auction);
+  const accepted = practiceBids.filter((bid) => bid.isValid);
+
+  /**
+   * The rehearsal presents the auction as running, because that is the state
+   * the controls belong to. Only `status` moves — every bound the supplier is
+   * about to meet is the real one.
+   */
+  const asIfLive: AuctionState = {
+    ...held,
+    auction: { ...held.auction, status: 'LIVE' },
+    lots: held.lots.map((l) => (l.id === lot.id ? { ...l, status: 'LOT_OPEN' as const } : l)),
+    bids: practiceBids,
+  };
+  const practiceView = bidderView(asIfLive, lot.id, bidderId, COUNTERPARTY_NAMES);
+
+  return (
+    <div
+      style={{
+        border: `2px dashed ${color.accentPurple}`,
+        borderRadius: 12,
+        padding: 2,
+        background: color.accentPurpleSoft,
+      }}
+    >
+      <PortalCard
+        title={briefing.headline}
+        hint="A practice run. Nothing here counts, and nothing here is seen by the buyer."
+      >
+        <div className="rfx-stack" style={{ gap: 14 }}>
+          <div
+            style={{
+              fontSize: 13.5, lineHeight: 1.7, padding: '10px 12px',
+              background: color.surface, borderRadius: radius.control,
+            }}
+          >
+            {briefing.assurance}
+          </div>
+
+          <div>
+            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>Try this</div>
+            <ol style={{ margin: 0, paddingLeft: 18, fontSize: 14, lineHeight: 1.8 }}>
+              {briefing.tryThis.map((item) => <li key={item}>{item}</li>)}
+            </ol>
+          </div>
+
+          <BidControl
+            held={asIfLive}
+            view={practiceView}
+            lot={{ ...lot, status: 'LOT_OPEN' }}
+            lotDetail={lotDetail}
+            bidderId={bidderId}
+            currency={currency}
+            place={rehearse}
+            enabled
+            disabledReason={null}
+          />
+
+          <div style={{ fontSize: 13, color: color.textSecondary }}>
+            {practiceBids.length === 0
+              ? 'You have not tried anything yet.'
+              : `${practiceBids.length} practice ${practiceBids.length === 1 ? 'attempt' : 'attempts'}, `
+                + `${accepted.length} accepted. All of it is discarded when bidding opens.`}
+          </div>
+
+          {practiceBids.length > 0 && (
+            <div className="rfx-stack" style={{ gap: 4 }}>
+              {[...practiceBids].reverse().slice(0, 6).map((bid) => (
+                <div
+                  key={bid.id}
+                  style={{
+                    display: 'flex', gap: 10, alignItems: 'baseline', fontSize: 13,
+                    color: bid.isValid ? color.textPrimary : color.dangerText,
+                  }}
+                >
+                  <span style={{ fontVariantNumeric: 'tabular-nums', minWidth: 96 }}>
+                    {money(bid.bidValue, currency)}
+                  </span>
+                  <span style={{ flex: 1 }}>
+                    {bid.isValid ? 'accepted' : bid.rejectionReason ?? 'not accepted'}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </PortalCard>
+    </div>
+  );
+}
+
+/**
+ * The auction over time, as this supplier is permitted to see it.
+ *
+ * Every line here comes from `progressForBidder`, which builds by whitelist
+ * from the same visibility manifest the bid payload uses. A line the policy
+ * does not grant is not passed to the chart at all, so there is nothing here
+ * that could leak by being rendered — under BLIND the supplier sees their own
+ * history and nothing else, which is exactly right.
+ */
+function BidderProgressPanel({
+  held, lotId, bidderId, currency,
+}: { held: AuctionState; lotId: string; bidderId: string; currency: string }) {
+  const auction = held.auction;
+  const lot = held.lots.find((l) => l.id === lotId);
+  const [now, setNow] = React.useState(() => Date.now());
+  React.useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 5_000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const progress = progressForBidder(
+    auction, bidderId, lotId, held.bids, held.controlEvents,
+    lot?.startingPrice ?? 0,
+    lot ? held.lotDetails[lot.lotId]?.targetPrice ?? null : null,
+    now,
+  );
+  const feed = activityFeed({
+    auction,
+    bids: held.bids,
+    controlEvents: held.controlEvents,
+    auctionLotId: lotId,
+    nameOf: (id) => {
+      const bidder = held.bidders.find((b) => b.id === id);
+      return bidder ? COUNTERPARTY_NAMES[bidder.counterpartyId] : id;
+    },
+    audience: 'BIDDER',
+    bidderId,
+  });
+
+  const times = [
+    ...progress.mine.map((point) => point.at),
+    ...(progress.lead ?? []).map((point) => point.at),
+  ];
+  const from = times.length > 0 ? Math.min(...times) : auction.startsAt ?? now - 60_000;
+  const to = Math.max(now, ...times, from + 60_000);
+
+  const lines = [
+    {
+      label: 'Your bids',
+      stroke: color.brandPrimary,
+      points: progress.mine.map((point) => ({ at: point.at, value: point.value })),
+    },
+    // Present only when the policy grants a competitor's number.
+    ...(progress.lead
+      ? [{
+        label: 'Leading bid',
+        stroke: color.accentPurple,
+        dashed: true,
+        dots: false,
+        points: progress.lead.map((point) => ({ at: point.at, value: point.value })),
+      }]
+      : []),
+  ];
+
+  const rank = progress.rankOverTime?.[progress.rankOverTime.length - 1]?.rank ?? null;
+
+  return (
+    <PortalCard
+      title="How it is going"
+      hint={`The buyer shows you: ${progress.policyLabel.toLowerCase()}.`}
+    >
+      <div className="rfx-stack" style={{ gap: 14 }}>
+        <div style={{ display: 'flex', gap: 22, flexWrap: 'wrap' }}>
+          <Stat label="Your bids" value={String(progress.mine.length)} />
+          {rank !== null && <Stat label="Your rank" value={`#${rank}`} tone={rank === 1 ? 'good' : 'plain'} />}
+          {progress.fieldSize !== null && (
+            <Stat label="Bidders in" value={String(progress.fieldSize)} hint="have bid" />
+          )}
+        </div>
+
+        <PriceChart
+          side={auction.side}
+          startingPrice={progress.startingPrice}
+          from={from}
+          to={to}
+          format={(value) => money(value, currency, { compact: true })}
+          markers={progress.markers.map((marker) => ({ at: marker.at, label: marker.label }))}
+          lines={lines}
+          emptyNote="Your bids will appear here as you place them."
+        />
+
+        {progress.bandOverTime !== null && progress.bandOverTime.length > 0 && (
+          <div style={{ fontSize: 13, color: color.textSecondary }}>
+            Your colour against the buyer’s target, most recent last:{' '}
+            {progress.bandOverTime.map((point) => point.band.toLowerCase()).join(' → ')}.
+          </div>
+        )}
+
+        <div>
+          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>What has happened</div>
+          <ActivityFeed
+            rows={feed}
+            emptyNote="Nothing yet."
+            height={200}
+          />
+        </div>
+      </div>
+    </PortalCard>
+  );
+}
+
 function PositionPanel({
   view, amberBandPct,
 }: { view: ReturnType<typeof bidderView>; amberBandPct: number }) {
@@ -453,7 +828,7 @@ function PositionPanel({
       <div style={{ textAlign: 'center', padding: '20px 0' }}>
         <div aria-hidden style={{ fontSize: 30 }}>🔒</div>
         <div style={{ fontSize: 16, fontWeight: 600, marginTop: 8 }}>
-          {view.myBestBid === null ? 'You have not bid yet' : `Your bid: ${money(view.myBestBid, 'USD')}`}
+          {view.myBestBid === null ? 'You have not bid yet' : `Your bid: ${money(view.myBestBid)}`}
         </div>
         <div style={{ fontSize: 13.5, color: color.textSecondary, marginTop: 6, lineHeight: 1.65, maxWidth: 380, marginInline: 'auto' }}>
           This buyer has chosen not to share competitive information during bidding. Bid the price you
@@ -489,7 +864,7 @@ function PositionPanel({
           <div>
             <div style={{ fontSize: 12.5, color: color.textSecondary }}>Current leading price</div>
             <div style={{ fontSize: 26, fontWeight: 700, color: color.brandPrimary, fontVariantNumeric: 'tabular-nums' }}>
-              {money(p.bestPrice, 'USD')}
+              {money(p.bestPrice)}
             </div>
           </div>
         )}
@@ -512,7 +887,7 @@ function PositionPanel({
           <div>
             <div style={{ fontSize: 12.5, color: color.textSecondary }}>Your current bid</div>
             <div style={{ fontSize: 26, fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>
-              {money(view.myBestBid, 'USD')}
+              {money(view.myBestBid)}
             </div>
           </div>
         )}
@@ -525,7 +900,7 @@ function PositionPanel({
             {p.trafficBand === 'GREEN' && 'You are at or better than the level the buyer is aiming for.'}
             {p.trafficBand === 'AMBER' && `You are within ${amberBandPct}% of the level the buyer is aiming for. A modest improvement turns this green.`}
             {p.trafficBand === 'RED' && 'You are some way from the level the buyer is aiming for.'}
-            {p.targetPrice !== undefined && ` Their stated target is ${money(p.targetPrice, 'USD')}.`}
+            {p.targetPrice !== undefined && ` Their stated target is ${money(p.targetPrice)}.`}
           </div>
         </div>
       )}
@@ -548,7 +923,7 @@ function PositionPanel({
               >
                 <span style={{ fontWeight: i === 0 ? 700 : 400 }}>{entry.label}</span>
                 <span style={{ fontVariantNumeric: 'tabular-nums', fontWeight: i === 0 ? 700 : 400 }}>
-                  {money(entry.value, 'USD')}
+                  {money(entry.value)}
                 </span>
               </div>
             ))}

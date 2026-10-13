@@ -676,6 +676,18 @@ export interface AntiGamingConfig {
 
 export interface Auction {
   id: Id;
+  /**
+   * The reference both sides quote.
+   *
+   * `id` is a slug the code joins on; this is what a person types into an
+   * email. It is the auction's own, not the ask's: the ask that carries this
+   * auction may be numbered RFQ-2026-0142 because the journey reached the
+   * auction through an RFQ, and a supplier asking "which auction" needs an
+   * answer that means an auction. Its own series (`EA-`) so it can never be
+   * confused with an event number, and stored rather than derived because a
+   * reference that renumbers itself is not a reference.
+   */
+  auctionNumber: string;
   eventId: Id;
   /** Inherited from the event, never re-entered. */
   side: Side;
@@ -697,9 +709,22 @@ export interface Auction {
   discloseTarget: boolean;
   trafficAmberBandPct: number;
   antiGaming: AntiGamingConfig;
+  /**
+   * Settings that exist only for this mechanism.
+   *
+   * A Dutch clock has a tick interval, a Japanese round has a length, a sealed
+   * bid has a resubmission rule — and none of them mean anything to the other
+   * nine. Held as a bag rather than as nine optional columns, with the keys,
+   * the bounds and the defaults declared in `domain/auctionRules`, which is
+   * also what renders them and what reads them back.
+   */
+  parameters: AuctionParameters;
   startingPriceSource: string;
   targetPriceDerivation: string | null;
 }
+
+/** Keys are declared in `domain/auctionRules`. */
+export type AuctionParameters = Record<string, number | boolean>;
 
 export interface AuctionLot {
   id: Id;
@@ -752,7 +777,34 @@ export interface ProxyBidInstruction {
 
 export type AuctionEventKind =
   | 'OPENED' | 'PAUSED' | 'RESUMED' | 'EXTENDED' | 'FORCE_CLOSED'
-  | 'ABORTED' | 'LOT_OPENED' | 'LOT_CLOSED' | 'MESSAGE_BROADCAST';
+  | 'ABORTED' | 'LOT_OPENED' | 'LOT_CLOSED' | 'MESSAGE_BROADCAST'
+  /**
+   * Progress the controller drives, in the mechanisms that need driving.
+   *
+   * These are the append-only record of the auction advancing: the Japanese
+   * round, the sealed reveal, the held Dutch clock, the turn handed over. The
+   * live state is derived from them rather than stored a second time, so the
+   * log and the screen cannot disagree.
+   */
+  | 'ROUND_ADVANCED' | 'ENVELOPES_OPENED' | 'CLOCK_HELD' | 'CLOCK_RESUMED'
+  | 'TURN_CALLED' | 'TURN_SKIPPED'
+  /**
+   * The practice run, opened and closed by the controller.
+   *
+   * Whether a rehearsal is running is read from these rather than held as a
+   * flag, for the same reason as the round and the turn: one source, so the
+   * log and the screen cannot disagree about whether what a supplier just
+   * submitted counted.
+   */
+  | 'REHEARSAL_OPENED' | 'REHEARSAL_CLOSED'
+  /**
+   * What bidders may see, changed while the auction is running.
+   *
+   * A material change to the rules of a live competition, so it is logged with
+   * who made it and why, and every console is told. The `detail` carries the
+   * policy moved from and to.
+   */
+  | 'FEEDBACK_CHANGED';
 
 /** Logged with actor, timestamp and reason *before* it takes effect. */
 export interface AuctionControlEvent {

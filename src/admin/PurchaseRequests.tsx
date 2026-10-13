@@ -19,20 +19,20 @@
  *   expansion shows which specific lines are still available.
  */
 import React from 'react';
-import { color, money, radius } from '../design-system/tokens';
+import { BASE_CURRENCY, color, money, radius } from '../design-system/tokens';
 import {
   Button, Checkbox, Chip, Pill, Select, TextInput,
 } from '../design-system/components/primitives';
 import { Card, Empty, KpiRow, Table, Tabs, type Column, type Kpi } from '../design-system/components/layout';
-import { ValidationBanner } from '../design-system/components/domain';
+import { Modal, ValidationBanner } from '../design-system/components/domain';
 import {
   PR_STATUS_PRESENTATION, PR_TAB_LABELS, SOURCING_STATE_PRESENTATION, categoriesOf,
   derivedStatus, filterLines, filterRequests, lineValue, linesFor, requestAmount,
   sourceableLines, sourcingRollup, toCsv, type PrFilter, type PrTab,
 } from '../domain/purchaseRequests';
 import {
-  basketValue, buildSourcingRequisition, canSelect, categoriesIn, requestNumbersIn,
-  validateBasket,
+  basketValue, buildSourcingRequisition, canSelect, categoriesRanked,
+  requestNumbersIn, validateBasket,
 } from '../domain/sourcingRequisition';
 import { serverNow } from '../server/clock';
 import { useStore } from '../store/store';
@@ -78,17 +78,17 @@ export function PurchaseRequests({ onNavigate }: { onNavigate: (route: Route) =>
       iconBg: color.neutralSoft, iconFg: color.textBody,
     },
     {
-      icon: '≡', label: 'Lines', value: shownLines.length.toLocaleString('en-US'),
+      icon: '≡', label: 'Lines', value: shownLines.length.toLocaleString('en-IN'),
       iconBg: color.neutralSoft, iconFg: color.textBody,
     },
     {
-      icon: '○', label: 'Unsourced lines', value: shownSourceable.length.toLocaleString('en-US'),
+      icon: '○', label: 'Unsourced lines', value: shownSourceable.length.toLocaleString('en-IN'),
       iconBg: color.warningSoft, iconFg: color.warningText,
       title: 'Lines still available to feed a new sourcing event',
     },
     {
       icon: '◆', label: 'Unsourced value',
-      value: money(requestAmount(shownSourceable), 'USD', { compact: true }),
+      value: money(requestAmount(shownSourceable), BASE_CURRENCY, { compact: true }),
       iconBg: color.brandPrimarySoft, iconFg: color.brandPrimary,
       title: 'Spend still addressable by sourcing',
     },
@@ -394,12 +394,18 @@ function ConsolidatedBasket({ onNavigate }: { onNavigate: (route: Route) => void
   }
 
   const selected = state.purchaseRequestLines.filter((l) => selectedIds.includes(l.id));
-  const lockedCategory = selected.length > 0 ? categoriesIn(selected, requests)[0] : null;
+  // Ranked, because the first is the category the event is actually raised
+  // under when the basket spans several.
+  const basketCategories = categoriesRanked(selected, requests);
+  const mixedCategory = basketCategories.length > 1;
   const validation = validateBasket(selected, requests);
 
   const pageCount = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
   const current = Math.min(page, pageCount - 1);
   const shown = rows.slice(current * PAGE_SIZE, (current + 1) * PAGE_SIZE);
+
+  /** Held while the buyer confirms a cross-category basket. */
+  const [confirmMixed, setConfirmMixed] = React.useState(false);
 
   const toggle = (line: PurchaseRequestLine) =>
     setSelectedIds((ids) =>
@@ -421,12 +427,19 @@ function ConsolidatedBasket({ onNavigate }: { onNavigate: (route: Route) => void
 
   const initiateSourcing = () => {
     if (!validation.valid) return;
+    // Crossing a category is allowed, but never silently: the buyer confirms
+    // the consequence before a PRD number is burned on it.
+    if (mixedCategory && !confirmMixed) {
+      setConfirmMixed(true);
+      return;
+    }
     const requisition = buildSourcingRequisition({
       lines: selected, requests, existing: state.sourcingRequisitions,
       userId: state.currentUser.id, now: serverNow(),
     });
     dispatch({ type: 'CREATE_SOURCING_REQUISITION', requisition });
     setSelectedIds([]);
+    setConfirmMixed(false);
     onNavigate({ name: 'create', prdId: requisition.id });
   };
 
@@ -434,10 +447,10 @@ function ConsolidatedBasket({ onNavigate }: { onNavigate: (route: Route) => void
     {
       key: 'select', header: '', width: '40px',
       render: (line) => {
-        const { allowed, reason } = canSelect(line, selected, requests);
+        const { allowed, reason, warning } = canSelect(line, selected, requests);
         const isSelected = selectedIds.includes(line.id);
         return (
-          <span title={isSelected ? undefined : reason ?? undefined}>
+          <span title={isSelected ? undefined : reason ?? warning ?? undefined}>
             <Checkbox
               checked={isSelected}
               disabled={!allowed && !isSelected}
@@ -485,9 +498,16 @@ function ConsolidatedBasket({ onNavigate }: { onNavigate: (route: Route) => void
       key: 'category', header: 'Category', width: '160px',
       render: (line) => {
         const own = byRequestId.get(line.requestId)?.category;
-        const locked = lockedCategory !== null && own !== lockedCategory;
+        const lead = basketCategories[0];
+        // Once a basket exists, a line from another category is still
+        // selectable — it is marked because picking it changes what the event
+        // becomes, not because it is out of bounds.
+        const crosses = lead !== undefined && own !== undefined && own !== lead;
         return (
-          <span style={{ fontSize: 12, color: locked ? color.textMuted : color.textPrimary }}>
+          <span
+            style={{ fontSize: 12, color: crosses ? color.warningText : color.textPrimary }}
+            title={crosses ? `Outside ${lead} — adding this makes the event cross-category` : undefined}
+          >
             {own}
           </span>
         );
@@ -501,7 +521,7 @@ function ConsolidatedBasket({ onNavigate }: { onNavigate: (route: Route) => void
       key: 'qty', header: 'Quantity', numeric: true, width: '110px',
       render: (line) => (
         <span>
-          {line.quantity.toLocaleString('en-US')}
+          {line.quantity.toLocaleString('en-IN')}
           <span style={{ color: color.textMuted, fontSize: 10.5 }}> {line.uom}</span>
         </span>
       ),
@@ -558,7 +578,7 @@ function ConsolidatedBasket({ onNavigate }: { onNavigate: (route: Route) => void
           <Checkbox checked={mineOnly} label="My requests only" onChange={(v) => { setMineOnly(v); setPage(0); }} />
           <span style={{ flex: 1 }} />
           <span style={{ fontSize: 12, color: color.textSecondary }}>
-            Items: {rows.length.toLocaleString('en-US')}
+            Items: {rows.length.toLocaleString('en-IN')}
           </span>
           <Button variant="tertiary" size="small" onClick={selectPage}>
             Select page
@@ -615,7 +635,21 @@ function ConsolidatedBasket({ onNavigate }: { onNavigate: (route: Route) => void
                 {selected.length} {selected.length === 1 ? 'item' : 'items'} selected
               </strong>
               <span style={{ color: color.textMuted }}>·</span>
-              <Chip tone="brand">{lockedCategory}</Chip>
+              {basketCategories.map((category, i) => (
+                <Chip
+                  key={category}
+                  tone={mixedCategory ? (i === 0 ? 'gold' : 'neutral') : 'brand'}
+                  title={
+                    mixedCategory
+                      ? i === 0
+                        ? `The event will be raised under ${category}`
+                        : `Sourced under ${basketCategories[0]}, not ${category}`
+                      : undefined
+                  }
+                >
+                  {category}
+                </Chip>
+              ))}
               <span style={{ color: color.textMuted }}>·</span>
               <span style={{ fontSize: 12 }}>
                 from {requestNumbersIn(selected, requests).length} requisitions
@@ -655,6 +689,41 @@ function ConsolidatedBasket({ onNavigate }: { onNavigate: (route: Route) => void
           </div>
         </Card>
       )}
+
+      <Modal
+        open={confirmMixed}
+        title="This basket spans more than one category"
+        confirmLabel="Source them together"
+        onClose={() => setConfirmMixed(false)}
+        onConfirm={initiateSourcing}
+        width={540}
+      >
+        <div className="rfx-stack" style={{ gap: 10, fontSize: 12.5, lineHeight: 1.6 }}>
+          <div>
+            You are consolidating{' '}
+            <strong>
+              {basketCategories.map((category) => (
+                `${category} (${selected.filter((l) => byRequestId.get(l.requestId)?.category === category).length})`
+              )).join(', ')}
+            </strong>{' '}
+            into one event.
+          </div>
+          <div>
+            An event carries one category. This one will be raised under{' '}
+            <strong>{basketCategories[0]}</strong>, which decides three things for every line in it:
+          </div>
+          <ul style={{ margin: 0, paddingLeft: 18, display: 'grid', gap: 4 }}>
+            <li>the questionnaire suppliers answer,</li>
+            <li>the bidder shortlist they are drawn from,</li>
+            <li>and the DoA chain that approves the award.</li>
+          </ul>
+          <div>
+            The {basketCategories.slice(1).join(' and ')} lines will be sourced under all three
+            unchanged. That is right when you are consolidating for volume and the same suppliers
+            serve both. Split the basket if any of the three genuinely needs to differ.
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 }
@@ -706,7 +775,7 @@ function RequestLines({
       key: 'qty', header: 'Quantity', numeric: true, width: '110px',
       render: (line) => (
         <span>
-          {line.quantity.toLocaleString('en-US')}
+          {line.quantity.toLocaleString('en-IN')}
           <span style={{ color: color.textMuted, fontSize: 10.5 }}> {line.uom}</span>
         </span>
       ),

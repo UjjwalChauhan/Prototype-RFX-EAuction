@@ -5,6 +5,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   basketValue, buildSourcingRequisition, businessUnitsIn, canSelect, categoriesIn,
+  categoriesRanked,
   lotNameFor, nextPrdNumber, requestNumbersIn, suggestedTitle, toConsolidatedLines,
   validateBasket,
 } from '../sourcingRequisition';
@@ -39,7 +40,7 @@ const REQUESTS = [
   request({ id: 'pr3', requestNumber: 'RQ-0003', category: 'Facilities & MRO', businessUnit: 'Manufacturing' }),
 ];
 
-describe('category is the binding constraint', () => {
+describe('category is warned, not binding', () => {
   it('accepts any unsourced line into an empty basket', () => {
     expect(canSelect(line({ requestId: 'pr3' }), [], REQUESTS).allowed).toBe(true);
   });
@@ -50,27 +51,63 @@ describe('category is the binding constraint', () => {
     expect(result.allowed).toBe(true);
   });
 
-  it('refuses a line from another category, and says why', () => {
+  it('accepts a line from another category, and warns what it costs', () => {
     const held = [line({ id: 'a', requestId: 'pr1' })];
     const result = canSelect(line({ id: 'b', requestId: 'pr3' }), held, REQUESTS);
-    expect(result.allowed).toBe(false);
-    expect(result.reason).toContain('IT Hardware');
-    expect(result.reason).toContain('questionnaire');
+    expect(result.allowed).toBe(true);
+    expect(result.reason).toBeNull();
+    expect(result.warning).toContain('IT Hardware');
+    expect(result.warning).toContain('cross-category');
   });
 
-  it('refuses a line that is already sourced', () => {
+  it('still refuses a line that is already sourced', () => {
     const result = canSelect(line({ sourcingState: 'IN_EVENT' }), [], REQUESTS);
     expect(result.allowed).toBe(false);
     expect(result.reason).toContain('cannot be sourced twice');
+    expect(result.warning).toBeNull();
   });
 
-  it('blocks a mixed-category basket at validation too', () => {
+  it('warns a mixed-category basket at validation, without blocking it', () => {
     const validation = validateBasket(
       [line({ id: 'a', requestId: 'pr1' }), line({ id: 'b', requestId: 'pr3' })],
       REQUESTS,
     );
-    expect(validation.valid).toBe(false);
-    expect(validation.errors.map((e) => e.code)).toContain('MIXED_CATEGORY');
+    expect(validation.valid).toBe(true);
+    expect(validation.errors.map((e) => e.code)).not.toContain('MIXED_CATEGORY');
+    expect(validation.warnings.map((w) => w.code)).toContain('MIXED_CATEGORY');
+  });
+
+  it('names every category, its line count, and the one that will govern', () => {
+    const validation = validateBasket(
+      [
+        line({ id: 'a', requestId: 'pr1' }),
+        line({ id: 'b', requestId: 'pr2' }),
+        line({ id: 'c', requestId: 'pr3' }),
+      ],
+      REQUESTS,
+    );
+    const warning = validation.warnings.find((w) => w.code === 'MIXED_CATEGORY')!.message;
+    // pr1 and pr2 are both IT Hardware, so it leads on two lines to one.
+    expect(warning).toContain('IT Hardware (2)');
+    expect(warning).toContain('Facilities & MRO (1)');
+    expect(warning).toContain('raised under IT Hardware');
+    expect(warning).toContain('DoA chain');
+  });
+
+  it('raises the requisition under the category holding the most lines', () => {
+    const requisition = buildSourcingRequisition({
+      lines: [
+        line({ id: 'a', requestId: 'pr3' }),
+        line({ id: 'b', requestId: 'pr1' }),
+        line({ id: 'c', requestId: 'pr2' }),
+      ],
+      requests: REQUESTS,
+      existing: [],
+      userId: 'u1',
+      now: 0,
+    });
+    // Alphabetically 'Facilities & MRO' sorts first; by weight IT Hardware wins.
+    expect(requisition.category).toBe('IT Hardware');
   });
 
   it('blocks an empty basket', () => {
@@ -128,12 +165,26 @@ describe('PRD assignment', () => {
   });
 
   it('refuses to consolidate a basket that does not validate', () => {
+    // Currency still blocks: bids cannot be ranked across two of them, and
+    // unlike category there is nothing the event can pick and warn about.
+    expect(() =>
+      buildSourcingRequisition({
+        lines: [
+          line({ id: 'a', requestId: 'pr1', currency: 'USD' }),
+          line({ id: 'b', requestId: 'pr2', currency: 'EUR' }),
+        ],
+        requests: REQUESTS, existing: [], userId: 'u1', now: 0,
+      }),
+    ).toThrow(/cannot be ranked across currencies/);
+  });
+
+  it('no longer refuses a basket only because it spans categories', () => {
     expect(() =>
       buildSourcingRequisition({
         lines: [line({ id: 'a', requestId: 'pr1' }), line({ id: 'b', requestId: 'pr3' })],
         requests: REQUESTS, existing: [], userId: 'u1', now: 0,
       }),
-    ).toThrow(/one category/);
+    ).not.toThrow();
   });
 
   it('orders business units by how much of the demand they carry', () => {
@@ -209,12 +260,24 @@ describe('against the seeded requisitions', () => {
     expect(prd.category).toBe('Professional & Consultancy');
   });
 
-  it('refuses a basket spanning two seeded categories', () => {
+  it('allows a basket spanning two seeded categories, with a warning', () => {
     const a = sourceableLines(linesFor(PURCHASE_REQUEST_LINES, 'pr-00130'))[0];
     const b = sourceableLines(linesFor(PURCHASE_REQUEST_LINES, 'pr-00127'))[0];
     const validation = validateBasket([a, b], PURCHASE_REQUESTS);
-    expect(validation.valid).toBe(false);
-    expect(validation.errors.map((e) => e.code)).toContain('MIXED_CATEGORY');
+    expect(validation.valid).toBe(true);
+    expect(validation.warnings.map((w) => w.code)).toContain('MIXED_CATEGORY');
+  });
+
+  it('consolidates a cross-category basket end to end', () => {
+    const a = sourceableLines(linesFor(PURCHASE_REQUEST_LINES, 'pr-00130'))[0];
+    const b = sourceableLines(linesFor(PURCHASE_REQUEST_LINES, 'pr-00127'))[0];
+    // The old rule threw here; consolidating across categories now succeeds.
+    const requisition = buildSourcingRequisition({
+      lines: [a, b], requests: PURCHASE_REQUESTS, existing: [], userId: 'u1', now: 0,
+    });
+    expect(requisition.lineIds).toEqual([a.id, b.id]);
+    expect(categoriesRanked([a, b], PURCHASE_REQUESTS)).toContain(requisition.category);
+    expect(suggestedTitle([a, b], PURCHASE_REQUESTS)).toContain('further category');
   });
 
   it('turns a 100-line requisition into event lines across several lots', () => {

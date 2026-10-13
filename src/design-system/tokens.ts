@@ -5,6 +5,9 @@
  * Colour is never the only carrier of meaning: status is always colour + icon
  * + text, which is why every status map in the domain layer ships an icon.
  */
+import { BASE_CURRENCY } from '../domain/config';
+
+export { BASE_CURRENCY };
 
 export const color = {
   brandPrimary: '#2563EB',
@@ -80,25 +83,80 @@ export const density = {
 
 // ---------------------------------------------------------------------------
 // Money and number formatting
+//
+// The currency itself is a tenant fact, not a design token, so it is read from
+// the domain rather than declared twice.
 // ---------------------------------------------------------------------------
 
+/**
+ * How a currency groups its digits, and what it calls a large number.
+ *
+ * Indian grouping is not a formatting preference — 1,50,000 and 150,000 are the
+ * same number written for two different readers, and a rupee figure grouped in
+ * thousands reads as a mistake to the person who has to approve it. The same
+ * goes for the short forms: a reader of rupees scales in lakh and crore, not in
+ * k and M, and 12M where 1.2Cr belongs is a number nobody can check at a glance.
+ */
+interface Grouping {
+  locale: string;
+  /** Short forms, largest first, as [divisor, suffix]. */
+  scale: [number, string][];
+}
+
+const INDIAN: Grouping = {
+  locale: 'en-IN',
+  scale: [[10_000_000, 'Cr'], [100_000, 'L'], [1_000, 'k']],
+};
+
+const WESTERN: Grouping = {
+  locale: 'en-US',
+  scale: [[1_000_000, 'M'], [1_000, 'k']],
+};
+
+const groupingFor = (currency: string): Grouping => (currency === 'INR' ? INDIAN : WESTERN);
+
 /** Money uses tabular figures, right-aligned in tables, currency always shown. */
-export function money(value: number, currency = 'USD', options: { compact?: boolean } = {}): string {
-  if (options.compact && Math.abs(value) >= 1_000_000) {
-    return `${currencySymbol(currency)}${(value / 1_000_000).toFixed(1)}M`;
+export function money(
+  value: number,
+  currency = BASE_CURRENCY,
+  options: { compact?: boolean; decimals?: number } = {},
+): string {
+  const symbol = currencySymbol(currency);
+  const { locale, scale } = groupingFor(currency);
+
+  // Unit prices and anything an approver will add up need their decimals: a
+  // pen at 17.39 shown as 17 disagrees with its own arithmetic once quantity
+  // is applied. Asked for, they win over compaction.
+  if (options.decimals !== undefined) {
+    return `${symbol}${value.toLocaleString(locale, {
+      minimumFractionDigits: options.decimals, maximumFractionDigits: options.decimals,
+    })}`;
   }
-  if (options.compact && Math.abs(value) >= 1_000) {
-    return `${currencySymbol(currency)}${Math.round(value / 1_000)}k`;
+
+  if (options.compact) {
+    for (const [divisor, suffix] of scale) {
+      if (Math.abs(value) < divisor) continue;
+      // One decimal, dropped when it is a zero. Rounding to whole units loses
+      // too much where the units are large — 1.5L reported as 2L is fifty
+      // thousand rupees of rounding on a figure someone is about to approve.
+      const scaled = (value / divisor).toFixed(1).replace(/\.0$/, '');
+      return `${symbol}${scaled}${suffix}`;
+    }
   }
-  return `${currencySymbol(currency)}${Math.round(value).toLocaleString('en-US')}`;
+  return `${symbol}${Math.round(value).toLocaleString(locale)}`;
+}
+
+/** Group a plain number the way its currency's readers expect. */
+export function groupNumber(value: number, currency = BASE_CURRENCY): string {
+  return value.toLocaleString(groupingFor(currency).locale);
 }
 
 export function currencySymbol(currency: string): string {
   switch (currency) {
+    case 'INR': return '₹';
     case 'USD': return '$';
     case 'EUR': return '€';
     case 'GBP': return '£';
-    case 'INR': return '₹';
     case 'AED': return 'AED ';
     default: return `${currency} `;
   }
@@ -110,7 +168,7 @@ export function pct(value: number, decimals = 1): string {
 }
 
 /** Savings are signed, and negatives are never hidden. */
-export function signedMoney(value: number, currency = 'USD'): string {
+export function signedMoney(value: number, currency = BASE_CURRENCY): string {
   const sign = value < 0 ? '−' : '+';
   return `${sign}${money(Math.abs(value), currency)}`;
 }

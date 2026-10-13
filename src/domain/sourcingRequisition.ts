@@ -1,11 +1,17 @@
 /**
  * Consolidating requisition lines into one sourceable demand.
  *
- * The thing this module exists to enforce: **a basket is single-category.**
- * Lines from six requisitions can be sourced as one event; lines from two
- * categories cannot, because category drives the questionnaire, the bidder
- * shortlist, the evaluation model and the DoA chain. A mixed basket would have
- * to pick one of those and silently mis-apply it to the rest.
+ * The thing this module exists to make visible: **a basket is normally
+ * single-category.** Lines from six requisitions are routinely sourced as one
+ * event. Lines from two categories can be too — a buyer consolidating spend
+ * across categories to win volume is doing something real — but it is never
+ * free, because category drives the questionnaire, the bidder shortlist, the
+ * evaluation model and the DoA chain, and an event carries exactly one of each.
+ *
+ * So a mixed basket is allowed and warned rather than refused. The event is
+ * raised under the category holding the most lines, and the warning names that
+ * category and what follows from it, so the buyer chooses the consequence
+ * instead of discovering it at evaluation.
  *
  * The second rule: **only unsourced lines may enter a basket.** A line already
  * out in an event would otherwise be bid on twice for one requirement.
@@ -30,7 +36,30 @@ export interface BasketValidation {
   valid: boolean;
 }
 
-/** The categories present in a selection. More than one is a blocking error. */
+/**
+ * The categories present in a selection, by weight of lines — the first is the
+ * one an event spanning several would be raised under.
+ *
+ * Ranked rather than alphabetical because the lead category decides the
+ * questionnaire and the approval chain: picking it by sort order would hand
+ * those to whichever name happened to sort first.
+ */
+export function categoriesRanked(
+  lines: PurchaseRequestLine[],
+  requests: PurchaseRequest[],
+): string[] {
+  const byId = new Map(requests.map((r) => [r.id, r]));
+  const counts = new Map<string, number>();
+  for (const line of lines) {
+    const category = byId.get(line.requestId)?.category;
+    if (category) counts.set(category, (counts.get(category) ?? 0) + 1);
+  }
+  return Array.from(counts.entries())
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .map(([category]) => category);
+}
+
+/** The categories present in a selection, sorted for display. */
 export function categoriesIn(
   lines: PurchaseRequestLine[],
   requests: PurchaseRequest[],
@@ -43,30 +72,37 @@ export function categoriesIn(
 
 /**
  * Whether a line may join a selection that already holds `selected`.
- * An empty selection accepts any unsourced line; after that, category binds.
+ *
+ * Only one thing actually refuses a line: it is already out in an event, and
+ * sourcing it twice would have two suppliers bidding for one requirement.
+ * Crossing a category is permitted and reported — `warning` is set so the
+ * caller can say what the cost is at the moment the line goes in, rather than
+ * leaving the buyer to find out after the basket is built.
  */
 export function canSelect(
   line: PurchaseRequestLine,
   selected: PurchaseRequestLine[],
   requests: PurchaseRequest[],
-): { allowed: boolean; reason: string | null } {
+): { allowed: boolean; reason: string | null; warning: string | null } {
   if (line.sourcingState !== 'UNSOURCED') {
     return {
       allowed: false,
+      warning: null,
       reason: `Already ${line.sourcingState === 'IN_EVENT' ? 'out in an event' : line.sourcingState.toLowerCase().replace('_', ' ')} — it cannot be sourced twice.`,
     };
   }
-  if (selected.length === 0) return { allowed: true, reason: null };
+  if (selected.length === 0) return { allowed: true, reason: null, warning: null };
 
-  const current = categoriesIn(selected, requests)[0];
+  const current = categoriesRanked(selected, requests)[0];
   const own = categoriesIn([line], requests)[0];
   if (current && own && current !== own) {
     return {
-      allowed: false,
-      reason: `The basket is sourcing ${current}. Category drives the questionnaire, the shortlist and the approval chain, so one event cannot carry two.`,
+      allowed: true,
+      reason: null,
+      warning: `The basket is sourcing ${current}. Adding ${own} makes this a cross-category event — one questionnaire, one shortlist and one approval chain will have to cover both.`,
     };
   }
-  return { allowed: true, reason: null };
+  return { allowed: true, reason: null, warning: null };
 }
 
 export function validateBasket(
@@ -81,11 +117,19 @@ export function validateBasket(
     return { errors, warnings, valid: false };
   }
 
-  const categories = categoriesIn(lines, requests);
-  if (categories.length > 1) {
-    errors.push({
+  const ranked = categoriesRanked(lines, requests);
+  if (ranked.length > 1) {
+    const lead = ranked[0];
+    const others = ranked.slice(1);
+    const counts = new Map<string, number>();
+    const byId = new Map(requests.map((r) => [r.id, r]));
+    for (const l of lines) {
+      const category = byId.get(l.requestId)?.category;
+      if (category) counts.set(category, (counts.get(category) ?? 0) + 1);
+    }
+    warnings.push({
       code: 'MIXED_CATEGORY',
-      message: `The selection spans ${categories.join(' and ')}. One event carries one category — raise a separate event per category.`,
+      message: `The selection spans ${ranked.length} categories — ${ranked.map((c) => `${c} (${counts.get(c)})`).join(', ')}. The event will be raised under ${lead}, so its questionnaire, bidder shortlist and DoA chain resolve against ${lead} and apply unchanged to the ${others.join(' and ')} lines. Split the basket if any of those three need to differ.`,
     });
   }
 
@@ -183,7 +227,9 @@ export function buildSourcingRequisition({
     tenantId: first?.tenantId ?? 'tenant-udaan',
     lineIds: lines.map((l) => l.id),
     requestNumbers: requestNumbersIn(lines, requests),
-    category: categoriesIn(lines, requests)[0],
+    // The category holding the most lines — a cross-category basket is raised
+    // under its lead, and validateBasket has already warned that it is.
+    category: categoriesRanked(lines, requests)[0],
     superCategory: first?.superCategory ?? null,
     businessUnits: businessUnitsIn(lines, requests),
     currency: lines[0].currency,
@@ -215,10 +261,21 @@ export interface ConsolidatedLine {
   id: Id;
   itemCode: string;
   description: string;
+  /** Carried across so the event line asks for what the requisition asked for. */
+  specification: string;
   quantity: number;
   uom: string;
+  deliveryLocation: string;
+  needBy: string;
   baselinePrice: number | null;
   lotName: string;
+  /**
+   * The category of the requisition this line came from. Carried onto the
+   * event line because a consolidated event can span several, and the bidder
+   * shortlist is built per category rather than per event.
+   */
+  category: string;
+  superCategory: string | null;
   /** Traceability, carried onto the event line. */
   sourcePrLineId: Id;
   sourceRequestNumber: string;
@@ -237,16 +294,22 @@ export function toConsolidatedLines(
 
   return lines.map((line) => {
     const family = lotNameFor(line);
+    const request = byId.get(line.requestId);
     return {
       id: `dl-${line.id}`,
       itemCode: line.itemCode,
       description: line.description,
+      specification: line.specification,
       quantity: line.quantity,
       uom: line.uom,
+      deliveryLocation: line.deliveryLocation,
+      needBy: line.needBy,
       baselinePrice: line.indicativePrice,
       lotName: `Lot ${families.indexOf(family) + 1} · ${family}`,
+      category: request?.category ?? '',
+      superCategory: request?.superCategory ?? null,
       sourcePrLineId: line.id,
-      sourceRequestNumber: byId.get(line.requestId)?.requestNumber ?? '',
+      sourceRequestNumber: request?.requestNumber ?? '',
     };
   });
 }
@@ -264,8 +327,14 @@ export function suggestedTitle(
   lines: PurchaseRequestLine[],
   requests: PurchaseRequest[],
 ): string {
-  const category = categoriesIn(lines, requests)[0] ?? 'Consolidated';
+  const ranked = categoriesRanked(lines, requests);
+  const category = ranked[0] ?? 'Consolidated';
   const numbers = requestNumbersIn(lines, requests);
-  if (numbers.length === 1) return `${category} — ${numbers[0]}`;
-  return `${category} — consolidated across ${numbers.length} requisitions`;
+  // A cross-category title says so, because the category in it is only the
+  // lead one and a buyer reading the event later should not be misled.
+  const subject = ranked.length > 1
+    ? `${category} and ${ranked.length - 1} further ${ranked.length === 2 ? 'category' : 'categories'}`
+    : category;
+  if (numbers.length === 1) return `${subject} — ${numbers[0]}`;
+  return `${subject} — consolidated across ${numbers.length} requisitions`;
 }

@@ -20,7 +20,7 @@ import {
 import { transformBid, transformationCoverage } from '../../domain/transformation';
 import { bestFirst } from '../../domain/comparator';
 import { rankLot } from '../../domain/auctionEngine';
-import { biddersForEvent, useStore } from '../../store/store';
+import { auctionFor, biddersForEvent, costComponentsFor, useStore } from '../../store/store';
 import { COUNTERPARTY_NAMES, LINE_ITEMS, QUESTIONNAIRE } from '../../data/seed';
 import type { AwardScoreComponent, PriceScoreMethod } from '../../domain/types';
 
@@ -48,9 +48,10 @@ export function EvaluationTab({ eventId }: { eventId: string }) {
 
   // Commercial values: the auction's transformed values where an auction ran,
   // otherwise the submitted price schedule.
-  const isPrimaryAuction = state.auction.auction.eventId === eventId;
+  const held = auctionFor(state, eventId);
+  const isPrimaryAuction = held !== null;
   const auctionRank = isPrimaryAuction
-    ? rankLot(state.auction.bids, 'al-1', event.side, state.auction.auction.antiGaming.tieBidPolicy)
+    ? rankLot(held!.bids, held!.lots[0]?.id ?? '', event.side, held!.auction.antiGaming.tieBidPolicy)
     : [];
 
   const commercialRows = bidders.map((bidder) => {
@@ -63,7 +64,7 @@ export function EvaluationTab({ eventId }: { eventId: string }) {
     const rawBid = fromAuction?.bidValue ?? scheduleTotal;
     const transform = transformBid(
       { bidderId: bidder.id, bidValue: rawBid, quantity: 1, lineCount: LINE_ITEMS.length },
-      state.auction.costComponents,
+      costComponentsFor(state, eventId),
       'SUPPLIER_SPECIFIC',
     );
     return {
@@ -109,7 +110,7 @@ export function EvaluationTab({ eventId }: { eventId: string }) {
     .map((row, i) => ({ ...row, rank: i + 1 }));
 
   const coverage = transformationCoverage(
-    state.auction.costComponents,
+    costComponentsFor(state, eventId),
     bidders.map((b) => b.id),
   );
 
@@ -828,7 +829,7 @@ function LineComparisonGrid({ eventId, showTransformed }: { eventId: string; sho
               // Under "transformed" the line carries its share of the bidder's
               // adjustment, so the grid and the ranking agree.
               const factor = showTransformed
-                ? 1 + (state.auction.costComponents
+                ? 1 + (costComponentsFor(state, eventId)
                     .filter((c) => c.basis === 'PERCENTAGE')
                     .reduce((a, c) => a + (c.valueByBidder[bidder.id] ?? 0), 0)) / 100
                 : 1;

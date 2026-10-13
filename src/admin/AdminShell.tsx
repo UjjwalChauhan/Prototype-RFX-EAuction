@@ -132,11 +132,11 @@ export function AdminShell({
                   fontSize: 13, fontWeight: 700, flexShrink: 0,
                 }}
               >
-                U
+                B
               </span>
               {!collapsed && (
                 <span>
-                  <span style={{ display: 'block', fontSize: 13, fontWeight: 700 }}>udaan</span>
+                  <span style={{ display: 'block', fontSize: 13, fontWeight: 700 }}>Bajel</span>
                   <span style={{ display: 'block', fontSize: 10.5, color: color.textSecondary }}>
                     Admin platform
                   </span>

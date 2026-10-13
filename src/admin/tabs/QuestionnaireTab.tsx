@@ -10,8 +10,8 @@ import { color, radius } from '../../design-system/tokens';
 import { Chip, NumberInput, Segmented, Select } from '../../design-system/components/primitives';
 import { Card } from '../../design-system/components/layout';
 import { AgentCard, ValidationBanner } from '../../design-system/components/domain';
-import { useStore } from '../../store/store';
-import { QUESTION_SECTIONS, QUESTIONNAIRE, LINE_ITEMS } from '../../data/seed';
+import { lineItemsForEvent, useStore } from '../../store/store';
+import { QUESTION_SECTIONS, QUESTIONNAIRE } from '../../data/seed';
 import type { Question, QuestionEnvelope } from '../../domain/types';
 
 const ENVELOPE_TONE: Record<QuestionEnvelope, { fg: string; bg: string; label: string; icon: string }> = {
@@ -23,6 +23,8 @@ const ENVELOPE_TONE: Record<QuestionEnvelope, { fg: string; bg: string; label: s
 export function QuestionnaireTab({ eventId }: { eventId: string }) {
   const { state } = useStore();
   const event = state.events.find((e) => e.id === eventId)!;
+  // A price schedule is bound to this event's lines, not to a fixed list.
+  const lineCount = lineItemsForEvent(state, eventId).length;
   const [questions, setQuestions] = React.useState<Question[]>(QUESTIONNAIRE.questions);
   const [selectedId, setSelectedId] = React.useState<string>(questions[0]?.id ?? '');
 
@@ -106,7 +108,7 @@ export function QuestionnaireTab({ eventId }: { eventId: string }) {
                           }}
                         >
                           <div style={{ fontSize: 11.5, fontWeight: 600, marginBottom: 5 }}>
-                            Bound to {LINE_ITEMS.length} event line items
+                            Bound to {lineCount} event line items
                           </div>
                           <div style={{ fontSize: 11, color: color.textSecondary, lineHeight: 1.5 }}>
                             This renders as a price grid, not a scalar answer. The supplier prices each

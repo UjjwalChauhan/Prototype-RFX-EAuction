@@ -24,10 +24,10 @@
  *    other question look less influential than it is.
  */
 import { STAGE_LABELS } from './journeyPatterns';
-import { defaultConfigFor, validateQuestionConfig } from './questionTypes';
+import { carryConfig, defaultConfigFor, validateQuestionConfig } from './questionTypes';
 import type {
   Id, QuestionType, QuestionnaireTemplate, ServerMillis, Stage, StageWeight,
-  TemplateQuestion, TemplateStatus, VendorInputPoint,
+  TemplateQuestion, TemplateSection, TemplateStatus, VendorInputPoint,
 } from './types';
 
 /** Question types that carry a price. None of them may be weighted. */
@@ -483,4 +483,290 @@ export function newQuestion(
     allowAttachment: false,
     config: defaultConfigFor('short_text', `${template.id}-q-${sequence}`),
   };
+}
+
+// ---------------------------------------------------------------------------
+// Applying a template inside the Create Event wizard
+// ---------------------------------------------------------------------------
+
+/**
+ * A questionnaire as it is being shaped for one event, at one point in the
+ * journey.
+ *
+ * The buyer picks a template and then edits — adds, removes, reweights. Those
+ * edits belong to the event, never to the library: a template is a shared asset
+ * and one event's needs must not rewrite it for everybody. So instantiating
+ * copies the questions and re-keys every id under the event, which also keeps
+ * the codes free to stay stable (a code is the join key for answer inheritance
+ * across stages, so it is deliberately *not* re-keyed).
+ */
+export interface DraftQuestionnaire {
+  point: VendorInputPoint;
+  /** The library template this started from. Null once blank, or after edits. */
+  templateId: Id | null;
+  templateName: string;
+  sections: TemplateSection[];
+  questions: TemplateQuestion[];
+}
+
+/** Copy a library template into an event-owned working set. */
+export function instantiateTemplate(
+  template: QuestionnaireTemplate,
+  point: VendorInputPoint,
+  idPrefix: string,
+): DraftQuestionnaire {
+  const sectionIdOf = (id: Id) => `${idPrefix}-sec-${id}`;
+  return {
+    point,
+    templateId: template.id,
+    templateName: template.name,
+    sections: template.sections
+      .slice()
+      .sort((a, b) => a.sequence - b.sequence)
+      .map((section) => ({ ...section, id: sectionIdOf(section.id) })),
+    questions: template.questions
+      .slice()
+      .sort((a, b) => a.sequence - b.sequence)
+      .map((question, i) => ({
+        ...question,
+        id: `${idPrefix}-q${i + 1}`,
+        templateId: idPrefix,
+        sectionId: question.sectionId === null ? null : sectionIdOf(question.sectionId),
+        sequence: i + 1,
+        // The config carries option ids that pointed at the template's question.
+        config: { ...question.config },
+      })),
+  };
+}
+
+/** An empty questionnaire for a point, for a buyer who wants to start clean. */
+export function blankQuestionnaire(
+  point: VendorInputPoint, idPrefix: string,
+): DraftQuestionnaire {
+  return {
+    point,
+    templateId: null,
+    templateName: 'Blank',
+    sections: [{ id: `${idPrefix}-sec-1`, name: 'General', sequence: 1 }],
+    questions: [],
+  };
+}
+
+/**
+ * Present a draft questionnaire as a template so the library's own validation
+ * runs against it unchanged. The wizard must not enforce a second, weaker copy
+ * of rules like "RFI is pre-commercial" — it has to be the same check.
+ */
+export function draftAsTemplate(draft: DraftQuestionnaire): QuestionnaireTemplate {
+  return {
+    id: draft.templateId ?? 'draft',
+    code: 'DRAFT',
+    name: draft.templateName || 'Questionnaire',
+    description: '',
+    appliesTo: [draft.point],
+    categories: [],
+    sections: draft.sections,
+    questions: draft.questions,
+    status: 'DRAFT',
+    version: 1,
+    scopeType: 'EVENT',
+    scopeId: 'draft',
+    createdBy: 'draft',
+    createdAt: 0,
+  };
+}
+
+/**
+ * Add a question to a draft questionnaire.
+ *
+ * Ids are sequence-independent because questions get deleted: keying off the
+ * length alone would reuse an id after a delete and collide with a survivor.
+ */
+export function addDraftQuestion(
+  draft: DraftQuestionnaire, sectionId: Id | null,
+): DraftQuestionnaire {
+  const maxSequence = draft.questions.reduce((max, q) => Math.max(max, q.sequence), 0);
+  const sequence = maxSequence + 1;
+  const id = `${draft.templateId ?? 'draft'}-q-new-${sequence}-${Date.now()}`;
+  const question: TemplateQuestion = {
+    id,
+    templateId: draft.templateId ?? 'draft',
+    sectionId,
+    sequence,
+    code: `Q.${sequence}`,
+    type: 'short_text',
+    title: '',
+    helpText: '',
+    isRequired: true,
+    // A question added at RFI is technical until the buyer says otherwise —
+    // defaulting to commercial would author the rule violation for them.
+    envelope: 'TECHNICAL',
+    weight: 10,
+    scoringMethod: 'MANUAL',
+    maxScore: 10,
+    rubric: null,
+    isKnockout: false,
+    allowAttachment: false,
+    config: defaultConfigFor('short_text', id),
+  };
+  return { ...draft, questions: [...draft.questions, question] };
+}
+
+/** Remove a question, closing the sequence gap it leaves behind. */
+export function removeDraftQuestion(
+  draft: DraftQuestionnaire, questionId: Id,
+): DraftQuestionnaire {
+  return {
+    ...draft,
+    questions: draft.questions
+      .filter((q) => q.id !== questionId)
+      .map((q, i) => ({ ...q, sequence: i + 1 })),
+  };
+}
+
+/**
+ * Turn scoring on or off for one question.
+ *
+ * Scoring and weight move together because they are meaningless apart: a
+ * weighted question that is not scored contributes nothing while inflating the
+ * total, and a scored question with no weight spends evaluator time on an
+ * answer that cannot change the ranking. Both are caught by `validateTemplate`,
+ * so the editor makes the state unreachable rather than letting a buyer author
+ * it and then telling them off for it.
+ */
+export function setDraftScored(
+  draft: DraftQuestionnaire, questionId: Id, scored: boolean,
+): DraftQuestionnaire {
+  return {
+    ...draft,
+    questions: draft.questions.map((q) => {
+      if (q.id !== questionId) return q;
+      if (!scored) return { ...q, scoringMethod: 'NONE' as const, weight: 0 };
+      // Price reaches the score through the price component alone, so a priced
+      // question cannot be made to carry weight here.
+      if (PRICED_QUESTION_TYPES.includes(q.type)) return q;
+      return {
+        ...q,
+        scoringMethod: q.scoringMethod === 'NONE' ? ('MANUAL' as const) : q.scoringMethod,
+        weight: q.weight > 0 ? q.weight : 10,
+      };
+    }),
+  };
+}
+
+/** Whether a question contributes to the technical score as it currently stands. */
+export function isScored(question: TemplateQuestion): boolean {
+  return (
+    question.weight > 0 &&
+    question.scoringMethod !== 'NONE' &&
+    !PRICED_QUESTION_TYPES.includes(question.type)
+  );
+}
+
+/**
+ * Change a question's type, keeping the answer format coherent.
+ *
+ * Switching to a priced type strips weight and scoring, because price may not
+ * be weighted twice — doing it here means the buyer never sees the error for a
+ * state they did not intend to author.
+ */
+export function setDraftType(
+  draft: DraftQuestionnaire, questionId: Id, type: QuestionType,
+): DraftQuestionnaire {
+  return {
+    ...draft,
+    questions: draft.questions.map((q) => {
+      if (q.id !== questionId) return q;
+      const config = carryConfig(q.type, type, q.config, q.id);
+      if (PRICED_QUESTION_TYPES.includes(type)) {
+        return { ...q, type, config, weight: 0, scoringMethod: 'NONE' as const };
+      }
+      return { ...q, type, config };
+    }),
+  };
+}
+
+/** Move a question one place up or down within the questionnaire. */
+export function moveDraftQuestion(
+  draft: DraftQuestionnaire, questionId: Id, direction: -1 | 1,
+): DraftQuestionnaire {
+  const ordered = [...draft.questions].sort((a, b) => a.sequence - b.sequence);
+  const index = ordered.findIndex((q) => q.id === questionId);
+  const target = index + direction;
+  if (index === -1 || target < 0 || target >= ordered.length) return draft;
+  // Swapping across a section boundary moves the question into that section,
+  // which is what a buyer dragging it there would expect.
+  const moved = ordered[index];
+  const displaced = ordered[target];
+  ordered[index] = { ...displaced };
+  ordered[target] = { ...moved, sectionId: displaced.sectionId };
+  return { ...draft, questions: ordered.map((q, i) => ({ ...q, sequence: i + 1 })) };
+}
+
+/** Add a section to group questions under. */
+export function addDraftSection(draft: DraftQuestionnaire, name: string): DraftQuestionnaire {
+  const sequence = draft.sections.reduce((max, s) => Math.max(max, s.sequence), 0) + 1;
+  return {
+    ...draft,
+    sections: [
+      ...draft.sections,
+      { id: `${draft.templateId ?? 'draft'}-sec-${sequence}-${Date.now()}`, name, sequence },
+    ],
+  };
+}
+
+export function renameDraftSection(
+  draft: DraftQuestionnaire, sectionId: Id, name: string,
+): DraftQuestionnaire {
+  return {
+    ...draft,
+    sections: draft.sections.map((s) => (s.id === sectionId ? { ...s, name } : s)),
+  };
+}
+
+/**
+ * Remove a section. Its questions move to the questionnaire's ungrouped set
+ * rather than being deleted with it — losing a buyer's questions because they
+ * tidied a heading would be a data-loss bug wearing a layout costume.
+ */
+export function removeDraftSection(
+  draft: DraftQuestionnaire, sectionId: Id,
+): DraftQuestionnaire {
+  return {
+    ...draft,
+    sections: draft.sections.filter((s) => s.id !== sectionId),
+    questions: draft.questions.map((q) =>
+      q.sectionId === sectionId ? { ...q, sectionId: null } : q,
+    ),
+  };
+}
+
+/**
+ * Seed a questionnaire for every point the journey asks at, keeping whatever
+ * the buyer has already shaped.
+ *
+ * Switching journey pattern mid-wizard reveals points that were not there
+ * before — a buyer who moves from a simple RFQ to a full ladder should find the
+ * RFI questionnaire already populated from the library rather than empty. Work
+ * already done at a point that survives the switch is never rebuilt, because
+ * re-seeding it would silently discard their edits.
+ */
+export function seedQuestionnaires({
+  existing, points, library, category, idSeed,
+}: {
+  existing: DraftQuestionnaire[];
+  points: VendorInputPoint[];
+  library: QuestionnaireTemplate[];
+  category: string | null;
+  idSeed: string;
+}): DraftQuestionnaire[] {
+  return points.map((point) => {
+    const already = existing.find((q) => q.point === point);
+    if (already) return already;
+    const options = templatesFor(library, point, category);
+    const prefix = `${idSeed}-${point.toLowerCase()}`;
+    return options.length > 0
+      ? instantiateTemplate(options[0], point, prefix)
+      : blankQuestionnaire(point, prefix);
+  });
 }

@@ -389,7 +389,7 @@ function buildRequest(spec: RequestSpec, seed: number): {
     submittedByCode: spec.requester.code,
     businessUnit: spec.businessUnit,
     costCentre: spec.costCentre,
-    currency: 'USD',
+    currency: 'INR',
     needBy: spec.needBy,
     deliveryLocation: LOCATIONS[seed % LOCATIONS.length],
     justification: spec.justification,
@@ -427,7 +427,7 @@ function buildRequest(spec: RequestSpec, seed: number): {
       deliveryLocation: pick(rand, LOCATIONS),
       indicativePrice:
         Math.round((family.priceLow + rand() * (family.priceHigh - family.priceLow)) * 100) / 100,
-      currency: 'USD',
+      currency: 'INR',
       sourcingState: state,
       eventNumber: sourced ? spec.eventNumber : null,
       hasVendorQuote: rand() < 0.18,

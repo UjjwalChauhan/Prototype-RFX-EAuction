@@ -11,15 +11,19 @@ import { Button, Chip, Pill } from '../design-system/components/primitives';
 import { KpiRow, StageRail, Tabs, type Kpi } from '../design-system/components/layout';
 import { EVENT_STATUS_PRESENTATION } from '../domain/statusMachine';
 import { JOURNEY_PATTERNS, buildStageRail, workspaceTabs } from '../domain/journeyPatterns';
+import { isStageEvent } from '../domain/stageEvents';
 import { rankLot } from '../domain/auctionEngine';
 import { formatCountdown, serverNow } from '../server/clock';
-import { biddersForEvent, useStore } from '../store/store';
+import { auctionFor, biddersForEvent, responsesForEvent, useStore } from '../store/store';
 import { OverviewTab } from './tabs/OverviewTab';
 import { ItemsLotsTab } from './tabs/ItemsLotsTab';
 import { BiddersTab } from './tabs/BiddersTab';
 import { QuestionnaireTab } from './tabs/QuestionnaireTab';
-import { ClarificationsTab, TermsTab, ActivityTab } from './tabs/SmallTabs';
+import { ClarificationsTab, ActivityTab } from './tabs/SmallTabs';
+import { TermsTab } from './tabs/TermsTab';
 import { ResponsesTab } from './tabs/ResponsesTab';
+import { ComparisonTab } from './tabs/ComparisonTab';
+import { TimelineTab } from './tabs/TimelineTab';
 import { EvaluationTab } from './tabs/EvaluationTab';
 import { AuctionTab } from './tabs/AuctionTab';
 import { NegotiationTab } from './tabs/NegotiationTab';
@@ -71,9 +75,10 @@ export function useEventWorkspace(
 
   const railItems = buildStageRail(event.stagesEnabled, event.currentStage, conditional, skipReasons);
 
-  const isPrimaryAuction = state.auction.auction.eventId === eventId;
+  const held = auctionFor(state, eventId);
+  const isPrimaryAuction = held !== null;
   const liveRank = isPrimaryAuction
-    ? rankLot(state.auction.bids, 'al-1', event.side, state.auction.auction.antiGaming.tieBidPolicy)
+    ? rankLot(held!.bids, held!.lots[0]?.id ?? '', event.side, held!.auction.antiGaming.tieBidPolicy)
     : [];
   const bestBid = liveRank[0]?.transformedValue ?? null;
 
@@ -90,9 +95,9 @@ export function useEventWorkspace(
     switch (kpiVariant) {
       case 'auction':
         return [
-          { icon: '$', value: money(state.auction.lots[0]?.startingPrice ?? event.estimatedValue, event.currency), label: 'Starting price', iconBg: color.successSoft, iconFg: color.successText },
+          { icon: '₹', value: money(held?.lots[0]?.startingPrice ?? event.estimatedValue, event.currency), label: 'Starting price', iconBg: color.successSoft, iconFg: color.successText },
           {
-            icon: '$',
+            icon: '₹',
             value: bestBid === null ? '—' : money(bestBid, event.currency),
             label: `Best ${event.side === 'BUY' ? 'landed' : 'offered'} value`,
             iconBg: color.brandPrimarySoft, iconFg: color.brandPrimary, valueColor: color.brandPrimary,
@@ -100,9 +105,9 @@ export function useEventWorkspace(
           { icon: '◱', value: `${bidders.filter((b) => b.participationStatus === 'BIDDING' || b.participationStatus === 'JOINED').length}/${bidders.length}`, label: 'Bidders joined', iconBg: color.accentPurpleSoft, iconFg: color.accentPurpleText },
           {
             icon: '◷',
-            value: state.auction.lots[0]?.closesAt ? formatCountdown(state.auction.lots[0].closesAt - serverNow()) : '—',
+            value: held?.lots[0]?.closesAt ? formatCountdown(held.lots[0].closesAt - serverNow()) : '—',
             label: 'Time remaining', iconBg: color.dangerSoft, iconFg: color.dangerText,
-            live: state.auction.auction.status === 'LIVE', valueColor: color.dangerText,
+            live: held?.auction.status === 'LIVE', valueColor: color.dangerText,
           },
         ];
       case 'evaluation':
@@ -110,11 +115,11 @@ export function useEventWorkspace(
           { icon: '✓', value: String(bidders.filter((b) => b.qualificationStatus === 'QUALIFIED').length), label: 'Technically qualified', iconBg: color.successSoft, iconFg: color.successText },
           { icon: '◷', value: String(bidders.length - state.scores.filter((s) => s.eventId === eventId).length / 2), label: 'Awaiting scores', iconBg: color.warningSoft, iconFg: color.warningText },
           { icon: '◱', value: '1/2', label: 'Evaluators complete', iconBg: color.brandPrimarySoft, iconFg: color.brandPrimary },
-          { icon: '$', value: bestBid === null ? '—' : money(bestBid, event.currency), label: 'Best transformed value', iconBg: color.infoSoft, iconFg: color.infoText },
+          { icon: '₹', value: bestBid === null ? '—' : money(bestBid, event.currency), label: 'Best transformed value', iconBg: color.infoSoft, iconFg: color.infoText },
         ];
       case 'award':
         return [
-          { icon: '$', value: money(bestBid ?? event.estimatedValue, event.currency), label: 'Recommended value', iconBg: color.successSoft, iconFg: color.successText },
+          { icon: '₹', value: money(bestBid ?? event.estimatedValue, event.currency), label: 'Recommended value', iconBg: color.successSoft, iconFg: color.successText },
           { icon: '↓', value: money(event.estimatedValue - (bestBid ?? event.estimatedValue), event.currency), label: 'Savings vs baseline', iconBg: color.successSoft, iconFg: color.successText, valueColor: color.successText },
           { icon: '✓', value: 'L1 / 3', label: 'Approval level', iconBg: color.warningSoft, iconFg: color.warningText },
           { icon: '◷', value: '5 days', label: 'To award target', iconBg: color.infoSoft, iconFg: color.infoText },
@@ -125,7 +130,7 @@ export function useEventWorkspace(
           { icon: '✓', value: String(responded), label: 'Responded', iconBg: color.successSoft, iconFg: color.successText },
           { icon: '◷', value: String(bidders.length - responded), label: 'Pending', iconBg: color.warningSoft, iconFg: color.warningText },
           {
-            icon: '$',
+            icon: '₹',
             value: money(event.estimatedValue, event.currency, { compact: true }),
             label: `${event.side === 'BUY' ? 'Estimated' : 'Reserve'} value`,
             iconBg: color.infoSoft, iconFg: color.infoText,
@@ -136,16 +141,29 @@ export function useEventWorkspace(
 
   const goTab = (next: string) => onNavigate({ name: 'event', eventId, tab: next });
 
+  /** Set when this event is an ask created under a sourcing event. */
+  const parentEvent = isStageEvent(event)
+    ? state.events.find((e) => e.id === event.parentEventId) ?? null
+    : null;
+
   const body = (
     <div className="rfx-stack" style={{ gap: 14 }}>
       <KpiRow kpis={kpis} />
-      {tab === 'Overview' && <OverviewTab eventId={eventId} onGoTab={goTab} />}
+      {tab === 'Overview' && (
+        <OverviewTab
+          eventId={eventId}
+          onGoTab={goTab}
+          onOpenEvent={(next) => onNavigate({ name: 'event', eventId: next })}
+        />
+      )}
       {tab === 'Items & Lots' && <ItemsLotsTab eventId={eventId} />}
       {tab === 'Questionnaire' && <QuestionnaireTab eventId={eventId} />}
+      {tab === 'Timeline' && <TimelineTab eventId={eventId} />}
       {tab === 'Bidders' && <BiddersTab eventId={eventId} />}
       {tab === 'Terms' && <TermsTab eventId={eventId} />}
       {tab === 'Clarifications' && <ClarificationsTab eventId={eventId} />}
       {tab === 'Responses' && <ResponsesTab eventId={eventId} />}
+      {tab === 'Comparison' && <ComparisonTab eventId={eventId} />}
       {tab === 'Evaluation' && <EvaluationTab eventId={eventId} />}
       {tab === 'Negotiation' && <NegotiationTab eventId={eventId} />}
       {tab === 'Auction' && <AuctionTab eventId={eventId} />}
@@ -158,7 +176,7 @@ export function useEventWorkspace(
   const counts: Record<string, number | string> = {
     Bidders: bidders.length,
     Clarifications: state.clarifications.filter((c) => c.eventId === eventId && c.answer === null).length || '',
-    Responses: state.responses.filter((r) => r.eventId === eventId && r.submittedAt !== null).length,
+    Responses: responsesForEvent(state, eventId).filter((r) => r.submittedAt !== null).length,
   };
 
   return {
@@ -174,6 +192,19 @@ export function useEventWorkspace(
           Sourcing
         </button>
         <span aria-hidden style={{ color: color.borderStrong }}>›</span>
+        {/* An ask is reached through the event that raised it, and says so. */}
+        {parentEvent && (
+          <>
+            <button
+              type="button"
+              onClick={() => onNavigate({ name: 'event', eventId: parentEvent.id })}
+              style={{ border: 'none', background: 'none', color: color.brandPrimary, cursor: 'pointer', fontSize: 11.5, padding: 0 }}
+            >
+              {parentEvent.eventNumber}
+            </button>
+            <span aria-hidden style={{ color: color.borderStrong }}>›</span>
+          </>
+        )}
         <span style={{ color: color.textPrimary, fontWeight: 600 }}>{event.eventNumber}</span>
       </span>
     ),

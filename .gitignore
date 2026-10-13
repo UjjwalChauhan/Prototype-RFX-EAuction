@@ -1,5 +1,7 @@
 node_modules
 dist
+# The vendor portal builds to its own directory.
+dist-portal
 *.local
 .DS_Store
 

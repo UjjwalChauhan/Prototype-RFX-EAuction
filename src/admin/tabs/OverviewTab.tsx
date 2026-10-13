@@ -13,10 +13,19 @@ import { AUCTION_STATUS_PRESENTATION } from '../../domain/statusMachine';
 import { rankLot } from '../../domain/auctionEngine';
 import { directionLabel } from '../../domain/comparator';
 import { resolve } from '../../domain/config';
-import { biddersForEvent, lotsForEvent, useStore } from '../../store/store';
+import { auctionFor, biddersForEvent, lotsForEvent, stageEventsOf, useStore } from '../../store/store';
+import { issueStageEvent } from '../../domain/stageEvents';
+import { EVENT_STATUS_PRESENTATION } from '../../domain/statusMachine';
 import { COUNTERPARTY_NAMES, SCOPE_LINEAGE } from '../../data/seed';
 
-export function OverviewTab({ eventId, onGoTab }: { eventId: string; onGoTab: (tab: string) => void }) {
+export function OverviewTab({
+  eventId, onGoTab, onOpenEvent,
+}: {
+  eventId: string;
+  onGoTab: (tab: string) => void;
+  /** Opening a sibling ask, or the event they all hang off. */
+  onOpenEvent?: (eventId: string) => void;
+}) {
   const { state } = useStore();
   const event = state.events.find((e) => e.id === eventId)!;
   const pattern = JOURNEY_PATTERNS[event.journeyPattern];
@@ -26,9 +35,10 @@ export function OverviewTab({ eventId, onGoTab }: { eventId: string; onGoTab: (t
   const responded = bidders.filter(
     (b) => b.participationStatus === 'SUBMITTED' || b.participationStatus === 'BIDDING',
   );
-  const isPrimaryAuction = state.auction.auction.eventId === eventId;
+  const held = auctionFor(state, eventId);
+  const isPrimaryAuction = held !== null;
   const ranked = isPrimaryAuction
-    ? rankLot(state.auction.bids, 'al-1', event.side, state.auction.auction.antiGaming.tieBidPolicy)
+    ? rankLot(held!.bids, held!.lots[0]?.id ?? '', event.side, held!.auction.antiGaming.tieBidPolicy)
     : [];
 
   const feedbackPolicy = resolve(
@@ -55,6 +65,8 @@ export function OverviewTab({ eventId, onGoTab }: { eventId: string; onGoTab: (t
   return (
     <div className="rfx-split">
       <div className="rfx-stack" style={{ gap: 14 }}>
+        <FamilyCard eventId={eventId} onOpenEvent={onOpenEvent} />
+
         {conditionalGate && (
           <ValidationBanner
             tone={conditionalGate.met ? 'warning' : 'info'}
@@ -246,7 +258,7 @@ export function OverviewTab({ eventId, onGoTab }: { eventId: string; onGoTab: (t
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
               <span style={{ color: color.textSecondary }}>Auction status</span>
-              <Chip tone="neutral">{AUCTION_STATUS_PRESENTATION[state.auction.auction.status].label}</Chip>
+              <Chip tone="neutral">{AUCTION_STATUS_PRESENTATION[held?.auction.status ?? 'DRAFT'].label}</Chip>
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
               <span style={{ color: color.textSecondary }}>Current stage</span>
@@ -272,5 +284,104 @@ export function OverviewTab({ eventId, onGoTab }: { eventId: string; onGoTab: (t
         />
       </div>
     </div>
+  );
+}
+
+
+/**
+ * The asks under a sourcing event — or, on an ask, the event it belongs to.
+ *
+ * One journey produces several things a supplier can be sent, and the first
+ * question anyone asks looking at either end is *what else is there*. The
+ * ladder only makes sense read whole: the RFI going out now, the RFP behind
+ * it, and the fact that neither has its own basket.
+ */
+function FamilyCard({
+  eventId, onOpenEvent,
+}: { eventId: string; onOpenEvent?: (eventId: string) => void }) {
+  const { state, dispatch } = useStore();
+  const event = state.events.find((e) => e.id === eventId)!;
+  const parent = event.parentEventId === null
+    ? null
+    : state.events.find((e) => e.id === event.parentEventId) ?? null;
+  const asks = stageEventsOf(state, parent?.id ?? eventId);
+
+  if (asks.length === 0) return null;
+
+  const issue = (ask: (typeof asks)[number]) =>
+    dispatch({
+      type: 'UPDATE_EVENT',
+      eventId: ask.id,
+      patch: issueStageEvent(ask, Date.now()),
+    });
+
+  return (
+    <Card
+      title={parent === null ? 'Asks under this event' : `Part of ${parent.eventNumber}`}
+      hint={
+        parent === null
+          ? 'One basket, several asks. Each carries its own number, deadline and invitations, and each is listed in its own section.'
+          : 'This ask answers against the sourcing event\u2019s basket. Its siblings are below.'
+      }
+      action={
+        parent !== null && onOpenEvent
+          ? (
+            <Button size="small" variant="secondary" onClick={() => onOpenEvent(parent.id)}>
+              Open {parent.eventNumber}
+            </Button>
+          )
+          : undefined
+      }
+    >
+      <div className="rfx-stack" style={{ gap: 8 }}>
+        {asks.map((ask) => {
+          const isThis = ask.id === eventId;
+          return (
+            <div
+              key={ask.id}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap',
+                border: `1px solid ${isThis ? color.brandPrimary : color.border}`,
+                background: isThis ? color.brandPrimarySoft : '#fff',
+                borderRadius: radius.control, padding: '8px 11px',
+              }}
+            >
+              <span style={{ width: 66, fontSize: 12, color: color.textSecondary }}>
+                {STAGE_LABELS[ask.currentStage]}
+              </span>
+              <span style={{ fontSize: 12.5, fontWeight: 600, color: color.brandPrimary }}>
+                {ask.eventNumber}
+              </span>
+              <Chip tone={ask.status === 'DRAFT' ? 'neutral' : 'brand'}>
+                {ask.status === 'DRAFT' ? 'planned' : EVENT_STATUS_PRESENTATION[ask.status].label}
+              </Chip>
+              <span style={{ fontSize: 11.5, color: color.textSecondary }}>
+                {ask.closesAt === null
+                  ? 'no deadline'
+                  : `closes ${new Date(ask.closesAt).toLocaleString([], {
+                      day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit',
+                    })}`}
+              </span>
+              <span style={{ flex: 1 }} />
+              {ask.status === 'DRAFT' && (
+                <Button
+                  size="small"
+                  variant="secondary"
+                  onClick={() => issue(ask)}
+                  title="Send this ask to its shortlist now, rather than when the one before it closes."
+                >
+                  Issue now
+                </Button>
+              )}
+              {!isThis && onOpenEvent && (
+                <Button size="small" variant="secondary" onClick={() => onOpenEvent(ask.id)}>
+                  Open
+                </Button>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </Card>
   );
 }

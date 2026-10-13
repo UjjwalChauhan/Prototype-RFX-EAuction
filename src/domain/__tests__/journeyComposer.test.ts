@@ -48,22 +48,39 @@ describe('derived wizard steps', () => {
   it('reproduces every master pattern that is not hand-trimmed', () => {
     for (const pattern of ALL_PATTERNS) {
       if (HAND_TRIMMED.includes(pattern.id)) continue;
-      expect(deriveWizardSteps(pattern.stages), pattern.id).toEqual(pattern.wizardSteps);
+      expect(deriveWizardSteps(pattern.stages, pattern.vendorInputPoints), pattern.id)
+        .toEqual(pattern.wizardSteps);
     }
   });
 
   it('derives more steps than the hand-trimmed patterns keep, never fewer', () => {
     for (const id of HAND_TRIMMED) {
       const pattern = JOURNEY_PATTERNS[id];
-      const derived = deriveWizardSteps(pattern.stages);
+      const derived = deriveWizardSteps(pattern.stages, pattern.vendorInputPoints);
       expect(derived.length).toBeGreaterThan(pattern.wizardSteps.length);
       for (const step of pattern.wizardSteps) expect(derived).toContain(step);
     }
   });
 
   it('always opens on basics and items and ends on review', () => {
-    const steps = deriveWizardSteps(['INTAKE', 'AWARD']);
+    const steps = deriveWizardSteps(['INTAKE', 'AWARD'], []);
     expect(steps).toEqual(['Basics', 'Items & Lots', 'Review']);
+  });
+
+  it('adds a terms step wherever the journey asks the supplier for something', () => {
+    // Publishing is blocked when an ask goes out with no terms attached, so a
+    // journey with an ask and no step to attach them at cannot be published.
+    expect(deriveWizardSteps(['INTAKE', 'AWARD'], ['INTAKE'])).toContain('Terms');
+    expect(deriveWizardSteps(['INTAKE', 'AUCTION', 'AWARD'], ['AUCTION'])).toContain('Terms');
+    expect(deriveWizardSteps(['INTAKE', 'AWARD'], [])).not.toContain('Terms');
+  });
+
+  it('keeps the evaluation step narrower than the terms step', () => {
+    // A weighted model is worth a step only where a proposal is scored or
+    // negotiated; terms are needed wherever anything is asked at all.
+    const steps = deriveWizardSteps(['INTAKE', 'AUCTION', 'AWARD'], ['AUCTION']);
+    expect(steps).toContain('Terms');
+    expect(steps).not.toContain('Evaluation');
   });
 
   it('adds a bidders step only where the journey is competitive', () => {
@@ -72,7 +89,7 @@ describe('derived wizard steps', () => {
   });
 
   it('reshapes from three steps to nine as stages are added', () => {
-    expect(deriveWizardSteps(['INTAKE', 'AWARD'])).toHaveLength(3);
+    expect(deriveWizardSteps(['INTAKE', 'AWARD'], [])).toHaveLength(3);
     expect(deriveWizardSteps(
       ['INTAKE', 'RFQ', 'EVALUATION', 'NEGOTIATION', 'AUCTION', 'AWARD', 'APPROVAL'],
     )).toHaveLength(9);

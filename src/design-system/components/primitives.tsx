@@ -2,7 +2,7 @@
  * Pack 00 §2 — primitives. C-PILL, C-CHIP, buttons, inputs, selection controls.
  */
 import React from 'react';
-import { color, font, radius, type } from '../tokens';
+import { BASE_CURRENCY, color, currencySymbol, font, money, radius, type } from '../tokens';
 import type { StatusPresentation } from '../../domain/statusMachine';
 
 // ---------------------------------------------------------------------------
@@ -234,7 +234,9 @@ export interface CurrencyInputProps extends React.InputHTMLAttributes<HTMLInputE
   invalid?: boolean;
 }
 
-export function CurrencyInput({ currency = '$', invalid, style, ...rest }: CurrencyInputProps) {
+export function CurrencyInput({
+  currency = currencySymbol(BASE_CURRENCY), invalid, style, ...rest
+}: CurrencyInputProps) {
   return (
     <div
       style={{
@@ -481,14 +483,19 @@ export function Avatar({ initials, size = 26 }: { initials: string; size?: numbe
   );
 }
 
-export function Money({ value, currency = 'USD', bold, tone }: {
+/**
+ * A money figure.
+ *
+ * Formatted through `money()` rather than `Intl` directly, so a rupee amount is
+ * grouped in lakh here exactly as it is everywhere else — two formatters is two
+ * answers to the same question, and the screen shows both.
+ */
+export function Money({ value, currency = BASE_CURRENCY, bold, tone }: {
   value: number; currency?: string; bold?: boolean; tone?: string;
 }) {
   return (
     <span style={{ ...tabular, fontWeight: bold ? 700 : 400, color: tone ?? 'inherit' }}>
-      {new Intl.NumberFormat('en-US', {
-        style: 'currency', currency, maximumFractionDigits: 0,
-      }).format(value)}
+      {money(value, currency)}
     </span>
   );
 }

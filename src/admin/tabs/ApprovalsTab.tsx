@@ -38,7 +38,7 @@ import {
 } from '../../domain/nfaLifecycle';
 import { buyerView } from '../../server/auctionService';
 import { serverNow } from '../../server/clock';
-import { biddersForEvent, contractsForEvent, nfaForEvent, useStore } from '../../store/store';
+import { auctionFor, biddersForEvent, contractsForEvent, nfaForEvent, useStore } from '../../store/store';
 import { COUNTERPARTY_NAMES, DOA_RULES, LINE_ITEMS } from '../../data/seed';
 import {
   AWARD_QUANTITY_TOLERANCE_PCT, DRIFTED_DOA_RULES, NFA_SCENARIO_HINTS,
@@ -98,8 +98,9 @@ export function ApprovalsTab({ eventId }: { eventId: string }) {
   const isApprover = state.currentUser.permissions.includes('approve_at_level');
   const isBuyer = state.currentUser.permissions.includes('recommend_award');
 
-  const ranked = state.auction.auction.eventId === eventId
-    ? buyerView(state.auction, 'al-1', COUNTERPARTY_NAMES).filter((r) => r.bidCount > 0)
+  const heldAuction = auctionFor(state, eventId);
+  const ranked = heldAuction !== null
+    ? buyerView(heldAuction, heldAuction.lots[0]?.id ?? '', COUNTERPARTY_NAMES).filter((r) => r.bidCount > 0)
     : [];
   const winner = ranked[0];
 

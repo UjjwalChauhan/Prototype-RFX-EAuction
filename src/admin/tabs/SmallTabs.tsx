@@ -11,7 +11,7 @@ import { color, radius } from '../../design-system/tokens';
 import { Button, Chip, Radio, Textarea, Toggle } from '../../design-system/components/primitives';
 import { Card, Empty, Table, type Column } from '../../design-system/components/layout';
 import { AgentCard, Modal, ValidationBanner } from '../../design-system/components/domain';
-import { useStore } from '../../store/store';
+import { auctionFor, useStore } from '../../store/store';
 import { COUNTERPARTY_NAMES } from '../../data/seed';
 import { auditTrail } from '../../server/audit';
 import type { Clarification, ClarificationVisibility } from '../../domain/types';
@@ -238,64 +238,6 @@ export function ClarificationsTab({ eventId }: { eventId: string }) {
 }
 
 // ---------------------------------------------------------------------------
-// Terms
-// ---------------------------------------------------------------------------
-
-export function TermsTab({ eventId }: { eventId: string }) {
-  const { state } = useStore();
-  const event = state.events.find((e) => e.id === eventId)!;
-
-  const clauses = [
-    { id: 'c1', ref: '3.1', title: 'Payment terms', body: 'Net 60 days from receipt of a valid invoice.', deviations: 1 },
-    { id: 'c2', ref: '4.2', title: 'Delivery and lead time', body: 'Delivery to the named location within the quoted lead time; late delivery attracts the service credit at 5.4.', deviations: 0 },
-    { id: 'c3', ref: '7.3', title: 'Price validity and index adjustment', body: 'Prices are firm for 12 months. Index adjustment applies only where explicitly agreed at award.', deviations: 2 },
-    { id: 'c4', ref: '9.1', title: 'Liability cap', body: 'Liability capped at the contract value in the preceding 12 months.', deviations: 1 },
-    { id: 'c5', ref: '11.4', title: 'Termination for convenience', body: '30 days written notice, no compensation beyond delivered goods.', deviations: 0 },
-  ];
-
-  return (
-    <div className="rfx-stack" style={{ gap: 14 }}>
-      <ValidationBanner tone="info" title="Deviations surface on the NFA">
-        A deviation a bidder proposes is captured against its clause, not buried in an attachment, so it
-        appears in the NFA's deviations section where an approver will see it.
-      </ValidationBanner>
-
-      <Card padded={false} title="Terms & conditions" hint={`Standard terms for ${event.category}. ${clauses.reduce((a, c) => a + c.deviations, 0)} deviations proposed across all bidders.`}>
-        <div>
-          {clauses.map((clause, i) => (
-            <div
-              key={clause.id}
-              style={{
-                display: 'flex', gap: 14, padding: '12px 15px',
-                borderTop: i === 0 ? 'none' : `1px solid ${color.border}`,
-              }}
-            >
-              <span
-                style={{
-                  fontSize: 11.5, fontWeight: 700, color: color.textSecondary,
-                  fontFamily: 'ui-monospace, Menlo, monospace', width: 40, flexShrink: 0,
-                }}
-              >
-                {clause.ref}
-              </span>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 13, fontWeight: 600 }}>{clause.title}</div>
-                <div style={{ fontSize: 12, color: color.textBody, marginTop: 3, lineHeight: 1.6 }}>{clause.body}</div>
-              </div>
-              {clause.deviations > 0 ? (
-                <Chip tone="gold" icon="⚑">{clause.deviations} deviation{clause.deviations > 1 ? 's' : ''}</Chip>
-              ) : (
-                <Chip tone="brand" icon="✓">accepted by all</Chip>
-              )}
-            </div>
-          ))}
-        </div>
-      </Card>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
 // Activity
 // ---------------------------------------------------------------------------
 
@@ -321,8 +263,7 @@ export function ActivityTab({ eventId }: { eventId: string }) {
       object: `${entry.objectType} ${entry.objectId}`,
       reason: entry.reason,
     })),
-    ...state.auction.controlEvents
-      .filter(() => state.auction.auction.eventId === eventId)
+    ...(auctionFor(state, eventId)?.controlEvents ?? [])
       .map((event) => ({
         id: event.id,
         at: event.at,

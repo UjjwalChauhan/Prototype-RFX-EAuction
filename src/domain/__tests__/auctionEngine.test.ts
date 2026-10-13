@@ -8,13 +8,14 @@ import {
   placeBid, rankLot, resetSequenceForTests, resolveProxies, validateBid,
   type BidAttempt,
 } from '../auctionEngine';
+import { defaultParameters } from '../auctionRules';
 import type { Auction, AuctionLot, Bid, CostComponent } from '../types';
 
 const NOW = 1_700_000_000_000;
 
 function auction(overrides: Partial<Auction> = {}): Auction {
   return {
-    id: 'auc-1', eventId: 'evt-1', side: 'BUY',
+    id: 'auc-1', auctionNumber: 'EA-2026-0001', eventId: 'evt-1', side: 'BUY',
     mechanism: 'ENGLISH', clockOwner: 'BIDDER', rounds: 'CONTINUOUS',
     feedbackPolicy: 'RANK_ONLY', identityPolicy: 'MASKED',
     lotStrategy: 'INDEPENDENT', biddingLevel: 'LOT', closePolicy: 'SOFT_EXTENSION',
@@ -22,6 +23,7 @@ function auction(overrides: Partial<Auction> = {}): Auction {
     status: 'LIVE', startsAt: NOW - 600_000, endsAt: NOW + 600_000,
     extensionsUsed: 0, discloseTarget: false, trafficAmberBandPct: 5,
     antiGaming: { ...DEFAULT_ANTI_GAMING },
+    parameters: defaultParameters(overrides.mechanism ?? 'ENGLISH'),
     startingPriceSource: 'test', targetPriceDerivation: null,
     ...overrides,
   };

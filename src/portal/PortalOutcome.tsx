@@ -10,7 +10,7 @@ import { color, money, radius } from '../design-system/tokens';
 import { Button, Chip, Segmented } from '../design-system/components/primitives';
 import { ValidationBanner } from '../design-system/components/domain';
 import { bidderView } from '../server/auctionService';
-import { useStore } from '../store/store';
+import { auctionFor, useStore } from '../store/store';
 import { COUNTERPARTY_NAMES, PORTAL_BIDDER_ID, PRIMARY_EVENT_ID } from '../data/seed';
 import { PortalCard } from './PortalShell';
 
@@ -19,7 +19,12 @@ type RegretDisclosure = 'NONE' | 'RANK_ONLY' | 'RANK_AND_GAP' | 'FULL';
 export function PortalOutcome() {
   const { state } = useStore();
   const event = state.events.find((e) => e.id === PRIMARY_EVENT_ID)!;
-  const view = bidderView(state.auction, 'al-1', PORTAL_BIDDER_ID, COUNTERPARTY_NAMES);
+  const held = auctionFor(state, PRIMARY_EVENT_ID);
+  const view = held === null
+    ? null
+    : bidderView(held, held.lots[0]?.id ?? '', PORTAL_BIDDER_ID, COUNTERPARTY_NAMES);
+  // Nothing to report on an event that never ran an auction.
+  if (view === null) return null;
 
   // Demonstration control: the buyer's configured disclosure level shapes what
   // a regretted bidder is told.
@@ -201,7 +206,7 @@ export function PortalOutcome() {
       <PortalCard title="Your history with this buyer">
         <div className="rfx-stack" style={{ gap: 12 }}>
           {[
-            { name: 'Catering Supplies', reference: 'RFQ-2024-044', result: 'Awarded', tone: 'brand' as const, value: '$18,900' },
+            { name: 'Catering Supplies', reference: 'RFQ-2024-044', result: 'Awarded', tone: 'brand' as const, value: '₹18,900' },
             { name: 'Janitorial Supplies', reference: 'RFQ-2024-041', result: 'Not selected', tone: 'neutral' as const, value: '—' },
             { name: 'IT Hardware Refresh', reference: 'RFP-2024-018', result: 'In progress', tone: 'gold' as const, value: 'pending' },
           ].map((row) => (

@@ -12,16 +12,13 @@ import {
 import { Card, Empty, Table, type Column } from '../../design-system/components/layout';
 import { AgentCard, Modal, ValidationBanner } from '../../design-system/components/domain';
 import { buyerView } from '../../server/auctionService';
-import { separationOfDutiesBreach, simulate } from '../../domain/doa';
-import { chainSignature, isPostAward, snapshotChain, submitRevision } from '../../domain/nfaLifecycle';
+import { buildApprovalSteps, separationOfDutiesBreach, simulate } from '../../domain/doa';
 import { computeSavingsLine, totalSavings, BASELINE_LABELS } from '../../domain/savings';
 import { JOURNEY_PATTERNS } from '../../domain/journeyPatterns';
-import { biddersForEvent, contractsForEvent, lotsForEvent, useStore } from '../../store/store';
-import { COUNTERPARTY_NAMES, DOA_RULES, LINE_ITEMS } from '../../data/seed';
+import { auctionFor, biddersForEvent, lineItemsForEvent, lotsForEvent, useStore } from '../../store/store';
+import { COUNTERPARTY_NAMES, DOA_RULES } from '../../data/seed';
 import { forbiddenReason } from '../../domain/agents';
-import { ScopeChangePanel } from '../nfa/ScopeChangePanel';
-import { UNQUOTED_ITEM } from '../../data/nfaScenarios';
-import type { AwardScenarioKind, Nfa, NfaDocument, SavingsLine } from '../../domain/types';
+import type { AwardScenarioKind, Nfa, SavingsLine } from '../../domain/types';
 
 interface Allocation {
   lotId: string;
@@ -38,6 +35,7 @@ export function AwardTab({ eventId, onGoTab }: { eventId: string; onGoTab: (tab:
   const event = state.events.find((e) => e.id === eventId)!;
   const bidders = biddersForEvent(state, eventId);
   const lots = lotsForEvent(state, eventId);
+  const eventLines = lineItemsForEvent(state, eventId);
   const pattern = JOURNEY_PATTERNS[event.journeyPattern];
 
   const [scenario, setScenario] = React.useState<AwardScenarioKind>('RECOMMENDED');
@@ -46,11 +44,10 @@ export function AwardTab({ eventId, onGoTab }: { eventId: string; onGoTab: (tab:
   const [submitOpen, setSubmitOpen] = React.useState(false);
   const [maxSharePct, setMaxSharePct] = React.useState(100);
   const [dualSource, setDualSource] = React.useState(false);
-  // Pack 28 D7 — the same blocked-action panel, reached from the scenario grid.
-  const [scopeChangeOpen, setScopeChangeOpen] = React.useState(false);
 
-  const ranked = state.auction.auction.eventId === eventId
-    ? buyerView(state.auction, 'al-1', COUNTERPARTY_NAMES).filter((r) => r.bidCount > 0)
+  const held = auctionFor(state, eventId);
+  const ranked = held !== null
+    ? buyerView(held, held.lots[0]?.id ?? '', COUNTERPARTY_NAMES).filter((r) => r.bidCount > 0)
     : [];
 
   const nfa = state.nfas.find((n) => n.eventId === eventId);
@@ -58,8 +55,8 @@ export function AwardTab({ eventId, onGoTab }: { eventId: string; onGoTab: (tab:
   // Allocation depends on the scenario chosen.
   const allocations: Allocation[] = React.useMemo(() => {
     if (ranked.length === 0) return [];
-    const lotName = state.auction.lotDetails['lot-1']?.name ?? 'Lot 1';
-    const winnerBid = state.auction.bids
+    const lotName = held!.lotDetails['lot-1']?.name ?? 'Lot 1';
+    const winnerBid = held!.bids
       .filter((b) => b.bidderId === ranked[0].bidderId && b.isValid)
       .sort((a, b) => a.transformedValue - b.transformedValue)[0];
 
@@ -67,7 +64,7 @@ export function AwardTab({ eventId, onGoTab }: { eventId: string; onGoTab: (tab:
       case 'DUAL_SOURCE': {
         if (ranked.length < 2) return [];
         const second = ranked[1];
-        const secondBid = state.auction.bids
+        const secondBid = held!.bids
           .filter((b) => b.bidderId === second.bidderId && b.isValid)
           .sort((a, b) => a.transformedValue - b.transformedValue)[0];
         return [
@@ -83,7 +80,7 @@ export function AwardTab({ eventId, onGoTab }: { eventId: string; onGoTab: (tab:
           return (bidderB.qualificationSnapshot + bidderB.performanceRatingSnapshot)
             - (bidderA.qualificationSnapshot + bidderA.performanceRatingSnapshot);
         })[0];
-        const bestBid = state.auction.bids
+        const bestBid = held!.bids
           .filter((b) => b.bidderId === best.bidderId && b.isValid)
           .sort((a, b) => a.transformedValue - b.transformedValue)[0];
         return [{ lotId: 'lot-1', lotName, bidderId: best.bidderId, bidderName: best.displayName, sharePct: 100, value: best.transformedValue, bidId: bestBid?.id ?? '' }];
@@ -91,7 +88,7 @@ export function AwardTab({ eventId, onGoTab }: { eventId: string; onGoTab: (tab:
       default:
         return [{ lotId: 'lot-1', lotName, bidderId: ranked[0].bidderId, bidderName: ranked[0].displayName, sharePct: 100, value: ranked[0].transformedValue, bidId: winnerBid?.id ?? '' }];
     }
-  }, [scenario, ranked, state.auction, bidders]);
+  }, [scenario, ranked, held, bidders]);
 
   const totalValue = allocations.reduce((a, x) => a + x.value, 0);
   const rankOneAwarded = allocations.some((a) => a.bidderId === ranked[0]?.bidderId && a.sharePct === 100);
@@ -109,7 +106,7 @@ export function AwardTab({ eventId, onGoTab }: { eventId: string; onGoTab: (tab:
     { rankOverride: isOverride, upliftLevels: 1 },
   );
 
-  const savingsLines: SavingsLine[] = LINE_ITEMS.map((item) => {
+  const savingsLines: SavingsLine[] = eventLines.map((item) => {
     const winner = allocations[0];
     const response = state.responses.find((r) => r.bidderId === winner?.bidderId);
     const priceLine = response?.priceLines.find((l) => l.lineItemId === item.id);
@@ -139,78 +136,22 @@ export function AwardTab({ eventId, onGoTab }: { eventId: string; onGoTab: (tab:
 
   const separation = nfa ? separationOfDutiesBreach(state.currentUser.id, nfa.steps) : { breach: false, message: null };
 
-  const riskStatement =
-    'AG-08 records no statutory or compliance blocker. One counterparty in the field is provisional; '
-    + 'supply continuity risk is rated low given two qualified alternates.';
-
-  /**
-   * The document a revision freezes. Pack 22 renders the twelve sections; this
-   * is the diffable content behind them, and Pack 28 compares revisions of it.
-   */
-  const buildDocument = (): NfaDocument => ({
-    scenarioId: scenario,
-    currency: event.currency,
-    allocations: allocations.map((a, i) => ({
-      lineId: `al-${i + 1}`,
-      lotId: a.lotId,
-      lotName: a.lotName,
-      bidderId: a.bidderId,
-      bidderName: a.bidderName,
-      sharePct: a.sharePct,
-      quantity: Math.round(LINE_ITEMS.reduce((sum, l) => sum + l.quantity, 0) * (a.sharePct / 100)),
-      value: a.value,
-      bidId: a.bidId,
-    })),
-    totalValue,
-    comparisonSheetVersion: 3,
-    rankOverride: isOverride,
-    overrideReason: isOverride ? overrideReason : null,
-    deviations,
-    chainSignature: chainSignature(doa.chain),
-    recommendation,
-    riskStatement,
-    processSummary: `Pattern followed: ${pattern.id} · ${pattern.name}. Stages executed: ${event.stagesEnabled.join(' → ')}.`,
-    competitionSummary: `${bidders.length} invited · ${bidders.filter((b) => b.invitationStatus === 'ACCEPTED').length} accepted · ${ranked.length} placed a valid bid.`,
-    costCentre: event.costCentre,
-    requiredByDate: null,
-    paymentTerms: 'Net 45',
-  });
-
   const submitNfa = () => {
-    const id = `nfa-${Date.now()}`;
-    const document = buildDocument();
-    // The note is created empty and revision 1 is *submitted* onto it, so the
-    // first submission goes through exactly the path every later one does.
-    const empty: Nfa = {
-      id,
+    const created: Nfa = {
+      id: `nfa-${Date.now()}`,
       eventId,
       scenarioId: scenario,
-      comparisonSheetVersion: document.comparisonSheetVersion,
+      comparisonSheetVersion: 3,
       recommendation,
       recommendedBy: state.currentUser.id,
       deviations,
-      riskStatement,
+      riskStatement:
+        'AG-08 records no statutory or compliance blocker. One counterparty in the field is provisional; supply continuity risk is rated low given two qualified alternates.',
       doaUpliftApplied: doa.upliftApplied,
       overrideReason: isOverride ? overrideReason : null,
-      steps: [],
+      steps: buildApprovalSteps(`nfa-${Date.now()}`, doa.chain),
       createdAt: Date.now(),
-      status: 'IN_APPROVAL',
-      revisions: [],
-      draft: document,
-      rejectionReason: null,
-      recallReason: null,
-      supersededByNfaId: null,
-      predecessorNfaId: null,
     };
-    const { nfa: created } = submitRevision({
-      nfa: empty,
-      document,
-      chain: snapshotChain(doa, Date.now()),
-      actorId: state.currentUser.id,
-      actorName: state.currentUser.name,
-      at: Date.now(),
-      settings: state.nfaOptions,
-    });
     dispatch({ type: 'ADD_NFA', nfa: created });
     dispatch({ type: 'UPDATE_EVENT', eventId, patch: { status: 'PENDING_AWARD_APPROVAL', currentStage: 'APPROVAL' } });
     setSubmitOpen(false);
@@ -260,16 +201,6 @@ export function AwardTab({ eventId, onGoTab }: { eventId: string; onGoTab: (tab:
         <Card
           title="Award scenarios"
           hint="Compare allocations before committing. The auction result is a recommendation, not an award."
-          action={
-            /* Once the event is at Award Recommended or later, a line can no
-               longer simply join the award. The control stays visible and opens
-               an explanation rather than disappearing or failing silently. */
-            isPostAward(event.status) ? (
-              <Button size="small" variant="secondary" onClick={() => setScopeChangeOpen(true)}>
-                Add a line to this award
-              </Button>
-            ) : undefined
-          }
         >
           <Segmented
             value={scenario}
@@ -361,7 +292,7 @@ export function AwardTab({ eventId, onGoTab }: { eventId: string; onGoTab: (tab:
               {event.description || 'No description recorded.'}
               {event.sourceReference && ` Source requisition ${event.sourceReference}.`}
               {' '}
-              {LINE_ITEMS.length} lines across {lots.length} lot(s).
+              {eventLines.length} lines across {lots.length} lot(s).
             </NfaSection>
 
             <NfaSection n={3} title="Process summary — including stages skipped and why">
@@ -403,14 +334,14 @@ export function AwardTab({ eventId, onGoTab }: { eventId: string; onGoTab: (tab:
             </NfaSection>
 
             <NfaSection n={7} title="Auction summary">
-              {state.auction.auction.eventId === eventId ? (
+              {held !== null ? (
                 <>
-                  {state.auction.auction.mechanism} auction,{' '}
-                  {state.auction.auction.feedbackPolicy} feedback,{' '}
-                  {state.auction.bids.filter((b) => b.isValid).length} valid bids from {ranked.length} bidders.
-                  Opening {money(state.auction.lots[0]?.startingPrice ?? 0, event.currency)} →
+                  {held!.auction.mechanism} auction,{' '}
+                  {held!.auction.feedbackPolicy} feedback,{' '}
+                  {held!.bids.filter((b) => b.isValid).length} valid bids from {ranked.length} bidders.
+                  Opening {money(held!.lots[0]?.startingPrice ?? 0, event.currency)} →
                   closing {money(ranked[0]?.transformedValue ?? 0, event.currency)}.
-                  {state.auction.auction.extensionsUsed > 0 && ` ${state.auction.auction.extensionsUsed} soft-close extension(s).`}
+                  {held!.auction.extensionsUsed > 0 && ` ${held!.auction.extensionsUsed} soft-close extension(s).`}
                 </>
               ) : (
                 'No auction was run on this event.'
@@ -590,24 +521,6 @@ export function AwardTab({ eventId, onGoTab }: { eventId: string; onGoTab: (tab:
           ]}
         />
       </div>
-
-      <ScopeChangePanel
-        open={scopeChangeOpen}
-        onClose={() => setScopeChangeOpen(false)}
-        settings={state.nfaOptions}
-        onSettingsChange={(patch) => dispatch({ type: 'SET_NFA_OPTION', patch })}
-        onRoute={() => setScopeChangeOpen(false)}
-        context={{
-          kind: 'ADD_LINE',
-          eventStatus: event.status,
-          origin: 'AWARD_SCENARIOS',
-          itemDescription: UNQUOTED_ITEM.description,
-          itemCategory: UNQUOTED_ITEM.category,
-          itemValue: UNQUOTED_ITEM.estimatedValue,
-          currency: event.currency,
-          contract: contractsForEvent(state, eventId)[0] ?? null,
-        }}
-      />
 
       <Modal
         open={submitOpen}

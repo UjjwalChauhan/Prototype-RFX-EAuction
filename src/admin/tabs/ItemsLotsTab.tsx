@@ -7,21 +7,39 @@
 import React from 'react';
 import { color, money, radius } from '../../design-system/tokens';
 import { Button, Chip, CurrencyInput, Field, Segmented } from '../../design-system/components/primitives';
-import { Card, Table, type Column } from '../../design-system/components/layout';
+import { Card, Empty, Table, type Column } from '../../design-system/components/layout';
 import { ValidationBanner } from '../../design-system/components/domain';
-import { contractsForEvent, lotsForEvent, useStore } from '../../store/store';
-import { LINE_ITEMS } from '../../data/seed';
+import { auctionFor, contractsForEvent, lineItemsForEvent, lotsForEvent, useStore } from '../../store/store';
 import { isPostAward } from '../../domain/nfaLifecycle';
 import { UNQUOTED_ITEM } from '../../data/nfaScenarios';
 import { ScopeChangePanel } from '../nfa/ScopeChangePanel';
 import type { LineItem, LotStrategy } from '../../domain/types';
 
+const lotButtonStyle = (selected: boolean): React.CSSProperties => ({
+  border: `1px solid ${selected ? color.brandPrimary : color.border}`,
+  background: selected ? '#F5F8FF' : '#fff',
+  borderRadius: radius.control, padding: '8px 12px', cursor: 'pointer', textAlign: 'left',
+});
+
 export function ItemsLotsTab({ eventId }: { eventId: string }) {
   const { state, dispatch } = useStore();
   const event = state.events.find((e) => e.id === eventId)!;
   const lots = lotsForEvent(state, eventId);
-  const [strategy, setStrategy] = React.useState<LotStrategy>(state.auction.auction.lotStrategy);
-  const [selectedLot, setSelectedLot] = React.useState(lots[0]?.id ?? '');
+  const lines = lineItemsForEvent(state, eventId);
+  const heldAuction = auctionFor(state, eventId);
+  const [strategy, setStrategy] = React.useState<LotStrategy>(
+    heldAuction?.auction.lotStrategy ?? 'INDEPENDENT',
+  );
+  /**
+   * Which lot the table is showing. Null is every lot — the right opening view
+   * for an event with several, since the basket is what the buyer came to see.
+   * A single-lot event has nothing to choose between, so it opens on its lot.
+   */
+  const [selectedLotId, setSelectedLotId] = React.useState<string | null>(null);
+  // A lot can be removed by a sync from the other side; never keep pointing at it.
+  const selectedLot = lots.some((l) => l.id === selectedLotId)
+    ? selectedLotId
+    : lots.length === 1 ? lots[0].id : null;
   /**
    * Pack 28 D7. At Award Recommended or later a line can no longer simply be
    * added: an award line must trace to a bid. The control is not removed and
@@ -31,12 +49,22 @@ export function ItemsLotsTab({ eventId }: { eventId: string }) {
   const [scopeChangeOpen, setScopeChangeOpen] = React.useState(false);
   const locked = isPostAward(event.status);
 
-  const lines = LINE_ITEMS.filter((l) => lots.some((lot) => lot.id === l.lotId));
-  const lotLines = lines.filter((l) => l.lotId === selectedLot);
+  const lotLines = selectedLot === null ? lines : lines.filter((l) => l.lotId === selectedLot);
   const lot = lots.find((l) => l.id === selectedLot);
+
+  const lotNameOf = (lotId: string) => lots.find((l) => l.id === lotId)?.name ?? '—';
 
   const columns: Column<LineItem>[] = [
     { key: 'line', header: '#', width: '44px', render: (l) => l.lineNumber },
+    // Which lot a line sits in only needs saying when more than one is on screen.
+    ...(selectedLot === null && lots.length > 1
+      ? [{
+          key: 'lot', header: 'Lot',
+          render: (l: LineItem) => (
+            <span style={{ fontSize: 11.5, color: color.textSecondary }}>{lotNameOf(l.lotId)}</span>
+          ),
+        }]
+      : []),
     { key: 'code', header: 'Code', render: (l) => <span style={{ fontSize: 11.5, color: color.textSecondary }}>{l.itemCode}</span> },
     {
       key: 'desc', header: 'Description',
@@ -102,7 +130,7 @@ export function ItemsLotsTab({ eventId }: { eventId: string }) {
             value={strategy}
             onChange={(next) => {
               setStrategy(next);
-              dispatch({ type: 'UPDATE_AUCTION', patch: { lotStrategy: next } });
+              dispatch({ type: 'UPDATE_AUCTION', eventId, patch: { lotStrategy: next } });
             }}
             options={[
               { value: 'INDEPENDENT', label: 'Independent' },
@@ -148,28 +176,56 @@ export function ItemsLotsTab({ eventId }: { eventId: string }) {
           </div>
         )}
 
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          {lots.map((lotItem) => (
-            <button
-              key={lotItem.id}
-              type="button"
-              onClick={() => setSelectedLot(lotItem.id)}
-              style={{
-                border: `1px solid ${selectedLot === lotItem.id ? color.brandPrimary : color.border}`,
-                background: selectedLot === lotItem.id ? '#F5F8FF' : '#fff',
-                borderRadius: radius.control, padding: '8px 12px', cursor: 'pointer', textAlign: 'left',
-              }}
-            >
-              <div style={{ fontSize: 12.5, fontWeight: 600, color: selectedLot === lotItem.id ? color.brandPrimary : color.textPrimary }}>
-                {lotItem.name}
-              </div>
-              <div style={{ fontSize: 11, color: color.textSecondary, marginTop: 2 }}>
-                {lines.filter((l) => l.lotId === lotItem.id).length} lines · {lotItem.awardMode === 'SPLIT' ? 'split award' : 'single winner'}
-              </div>
-            </button>
-          ))}
-        </div>
+        {lots.length === 0 ? (
+          <ValidationBanner tone="warning" title="This event has no lots yet">
+            Nothing has been lotted, so there is nothing for a supplier to price. Add a line below —
+            every line sits in a lot, and a lot is what is bid, ranked and awarded as a unit.
+          </ValidationBanner>
+        ) : (
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            {lots.length > 1 && (
+              <button
+                type="button"
+                onClick={() => setSelectedLotId(null)}
+                style={lotButtonStyle(selectedLot === null)}
+              >
+                <div style={{ fontSize: 12.5, fontWeight: 600, color: selectedLot === null ? color.brandPrimary : color.textPrimary }}>
+                  All lots
+                </div>
+                <div style={{ fontSize: 11, color: color.textSecondary, marginTop: 2 }}>
+                  {lines.length} lines · {lots.length} lot(s)
+                </div>
+              </button>
+            )}
+            {lots.map((lotItem) => (
+              <button
+                key={lotItem.id}
+                type="button"
+                onClick={() => setSelectedLotId(lotItem.id)}
+                style={lotButtonStyle(selectedLot === lotItem.id)}
+              >
+                <div style={{ fontSize: 12.5, fontWeight: 600, color: selectedLot === lotItem.id ? color.brandPrimary : color.textPrimary }}>
+                  {lotItem.name}
+                </div>
+                <div style={{ fontSize: 11, color: color.textSecondary, marginTop: 2 }}>
+                  {lines.filter((l) => l.lotId === lotItem.id).length} lines · {lotItem.awardMode === 'SPLIT' ? 'split award' : 'single winner'}
+                </div>
+              </button>
+            ))}
+          </div>
+        )}
       </Card>
+
+      {lot === undefined && lots.length > 0 && (
+        <Card
+          title="Price controls"
+          hint="Ceiling, floor, target and reserve are set per lot, not per event."
+        >
+          <div style={{ fontSize: 12.5, color: color.textSecondary }}>
+            Choose a lot above to set its price controls.
+          </div>
+        </Card>
+      )}
 
       {lot && (
         <Card
@@ -211,8 +267,8 @@ export function ItemsLotsTab({ eventId }: { eventId: string }) {
             </Field>
           </div>
           <div style={{ marginTop: 12, fontSize: 11.5, color: color.textSecondary }}>
-            Target derivation on record: <strong>{state.auction.auction.targetPriceDerivation ?? 'not stated'}</strong>.
-            {state.auction.auction.targetPriceDerivation === null && (
+            Target derivation on record: <strong>{heldAuction?.auction.targetPriceDerivation ?? 'not stated'}</strong>.
+            {(heldAuction?.auction.targetPriceDerivation ?? null) === null && (
               <span style={{ color: color.warningText }}> A target with no stated basis is flagged.</span>
             )}
           </div>
@@ -250,7 +306,22 @@ export function ItemsLotsTab({ eventId }: { eventId: string }) {
             </ValidationBanner>
           </div>
         )}
-        <Table columns={columns} rows={lotLines} rowKey={(l) => l.id} />
+        <Table
+          columns={columns}
+          rows={lotLines}
+          rowKey={(l) => l.id}
+          empty={
+            <Empty
+              icon="▤"
+              title={lots.length === 0 ? 'No lots or lines on this event' : 'This lot holds no lines yet'}
+              hint={
+                lots.length === 0
+                  ? 'Lines come in from a requisition when the event is raised against one, or are added here. Every line sits in a lot, and a lot is what gets bid and awarded.'
+                  : 'Add a line to this lot, or import the requisition lines the event was raised for.'
+              }
+            />
+          }
+        />
       </Card>
 
       <ScopeChangePanel

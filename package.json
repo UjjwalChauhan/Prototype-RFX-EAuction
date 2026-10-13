@@ -3,14 +3,19 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "Configurable RFx & E-Auction module — Admin Platform + Vendor Portal",
+  "description": "Configurable RFx & E-Auction module \u2014 Admin Platform + Vendor Portal",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "sync": "node sync-server.mjs",
+    "api": "node api-server.mjs",
+    "dev:portal": "vite --config vite.portal.config.ts",
+    "dev:all": "node api-server.mjs & vite & vite --config vite.portal.config.ts",
+    "build:portal": "vite build --config vite.portal.config.ts"
   },
   "dependencies": {
     "react": "^18.3.1",

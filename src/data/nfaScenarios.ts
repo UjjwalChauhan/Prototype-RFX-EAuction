@@ -33,7 +33,7 @@ export const RATE_CONTRACTS: RateContract[] = [
     id: 'ctr-1', contractNumber: 'RC-2026-0088', eventId: PRIMARY_EVENT_ID,
     supplierId: 'cp-abc', supplierName: 'ABC Supplies Co.',
     categoryScope: ['Indirect', 'Facilities'],
-    currency: 'USD', ceilingValue: 220_000, committedValue: 141_500,
+    currency: 'INR', ceilingValue: 220_000, committedValue: 141_500,
     startsAt: SEED_NOW - 5 * DAY, expiresAt: SEED_NOW + 330 * DAY,
   },
 ];
@@ -144,7 +144,7 @@ function document(over: Partial<NfaDocument> = {}): NfaDocument {
   const allocations = over.allocations ?? ALLOCATION_SINGLE;
   return {
     scenarioId: 'RECOMMENDED',
-    currency: 'USD',
+    currency: 'INR',
     allocations,
     totalValue: allocations.reduce((a, x) => a + x.value, 0),
     comparisonSheetVersion: 3,
@@ -153,7 +153,7 @@ function document(over: Partial<NfaDocument> = {}): NfaDocument {
     deviations: ['Below-minimum competition — 4 bidders invited against a minimum of 3 is met, but only 3 bid.'],
     chainSignature: chainSignature(THREE_LEVEL),
     recommendation:
-      'Recommend award to ABC Supplies Co. at 141,500 USD. Lowest transformed landed value across all three '
+      'Recommend award to ABC Supplies Co. at ₹1,41,500. Lowest transformed landed value across all three '
       + 'lots, highest performance rating in the field, and the only bidder holding stock in both delivery locations.',
     riskStatement:
       'AG-08 records no statutory or compliance blocker. Supply-continuity risk is rated low given two qualified alternates.',
@@ -308,7 +308,7 @@ function threeRevisions(): Nfa {
   const r2Document = document({
     processSummary: r1.document.processSummary,
     recommendation:
-      'Recommend award to ABC Supplies Co. at 141,500 USD. Lowest transformed landed value across all three '
+      'Recommend award to ABC Supplies Co. at ₹1,41,500. Lowest transformed landed value across all three '
       + 'lots, highest performance rating in the field, and the only bidder holding stock in both delivery locations. '
       + 'Baseline restated against the current contract rate at the request of level 2.',
   });

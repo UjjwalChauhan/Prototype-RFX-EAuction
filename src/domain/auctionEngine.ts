@@ -12,6 +12,7 @@ import type {
 } from './types';
 import { bestFirst, improvement, improvementPct, isBetter } from './comparator';
 import { transformBid } from './transformation';
+import { boolParam } from './auctionRules';
 
 // ---------------------------------------------------------------------------
 // Defaults — the practitioner configuration from the concept notes
@@ -141,6 +142,8 @@ export type RejectionCode =
   | 'REBID_ON_OWN_LEAD'
   | 'WITHDRAWAL_NOT_PERMITTED'
   | 'PROXY_CEILING_REQUIRED'
+  /** A second submission into a single-shot format that takes only one. */
+  | 'SUBMISSION_ALREADY_IN'
   | 'NEEDS_TYPED_CONFIRMATION';
 
 export interface ValidationOutcome {
@@ -211,9 +214,26 @@ export function validateBid(attempt: BidAttempt): ValidationOutcome {
   const leader = leaderOf(ranked);
   const mine = ranked.find((r) => r.bidderId === attempt.bidderId);
 
-  // Sealed and Vickrey are single-shot: no improvement rules apply, and a
-  // second bid replaces nothing — it is simply a new sealed submission.
+  // Sealed and Vickrey are single-shot: no improvement rules apply, because
+  // there is nothing to improve on that anybody has seen.
   const iterative = auction.rounds !== 'SINGLE';
+
+  /**
+   * One shot means one shot, unless the buyer said otherwise.
+   *
+   * Without this a sealed bid quietly accepted a second submission and ranked
+   * whichever was better — a bidder could submit twice and keep the winner,
+   * which is not a sealed bid. `sealed.allowResubmission` is the buyer's call:
+   * off is the strict reading most public procurement expects, on is kinder to
+   * a supplier who spots an error, and while the envelopes are still sealed
+   * nobody can be reacting to anything they have seen either way.
+   */
+  if (!iterative && mine !== undefined && !boolParam(auction, 'sealed.allowResubmission')) {
+    return reject(
+      'SUBMISSION_ALREADY_IN',
+      'You have already submitted for this lot. This auction takes one submission each.',
+    );
+  }
 
   if (iterative && leader) {
     const leadingIsMine = leader.bidderId === attempt.bidderId;
@@ -373,14 +393,23 @@ function buildBid(
   rejectionReason: string | null,
 ): Bid {
   return {
-    id: `bid-${attempt.auctionLot.id}-${nextSequenceNumber()}`,
+    /**
+     * Unique across the two applications, not merely within one of them.
+     *
+     * The sequence is a per-process counter, so the portal's first bid and the
+     * platform's first bid on the same lot were both `bid-<lot>-1`. The sync
+     * seam merges by id, which made those two different bids one — the second
+     * supplier's number silently replacing the first. The bidder and the
+     * server timestamp are what actually separate them.
+     */
+    id: `bid-${attempt.auctionLot.id}-${attempt.bidderId}-${attempt.serverNow}-${nextSequenceNumber()}`,
     auctionId: attempt.auction.id,
     auctionLotId: attempt.auctionLot.id,
     lineItemId: null,
     bidderId: attempt.bidderId,
     bidValue: attempt.bidValue,
     transformedValue,
-    currency: 'USD',
+    currency: 'INR',
     rankAtSubmission: rank,
     submittedAt: attempt.serverNow,
     source: meta.source,

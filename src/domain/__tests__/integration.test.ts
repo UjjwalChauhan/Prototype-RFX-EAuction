@@ -17,10 +17,18 @@ import { bidderView, buyerView } from '../../server/auctionService';
 import { resetServerClock, setServerOffset } from '../../server/clock';
 import { auditTrail } from '../../server/audit';
 import { rankLot } from '../auctionEngine';
-import { COUNTERPARTY_NAMES, PORTAL_BIDDER_ID } from '../../data/seed';
+import { COUNTERPARTY_NAMES, PORTAL_BIDDER_ID, PRIMARY_EVENT_ID } from '../../data/seed';
 import type { Lot, SourcingEvent } from '../types';
 
 const LOT = 'al-1';
+
+/**
+ * The auction under test.
+ *
+ * Auctions are held per event now, so a test that says "the auction" has to
+ * say which — the tenant runs five, on five different mechanisms.
+ */
+const auctionOf = (state: AppState) => state.auctions[PRIMARY_EVENT_ID];
 
 function fresh(): AppState {
   resetServerClock();
@@ -36,6 +44,7 @@ function bid(
 ): AppState {
   return reducer(state, {
     type: 'SUBMIT_BID',
+    eventId: PRIMARY_EVENT_ID,
     auctionLotId: LOT,
     bidderId,
     bidValue: value,
@@ -50,10 +59,10 @@ beforeEach(() => resetServerClock());
 describe('seed integrity', () => {
   it('starts with a live auction and a coherent standing', () => {
     const state = fresh();
-    expect(state.auction.auction.status).toBe('LIVE');
-    expect(state.auction.bids).toHaveLength(5);
+    expect(auctionOf(state).auction.status).toBe('LIVE');
+    expect(auctionOf(state).bids).toHaveLength(5);
 
-    const rows = rankLot(state.auction.bids, LOT, 'BUY');
+    const rows = rankLot(auctionOf(state).bids, LOT, 'BUY');
     expect(rows).toHaveLength(3);
     // Prime leads on transformed value at 147,200.
     expect(rows[0].bidderId).toBe('eb-prime');
@@ -62,7 +71,7 @@ describe('seed integrity', () => {
 
   it('demonstrates that the lowest headline bid is not the leader', () => {
     const state = fresh();
-    const rows = rankLot(state.auction.bids, LOT, 'BUY');
+    const rows = rankLot(auctionOf(state).bids, LOT, 'BUY');
     const cheapestHeadline = [...rows].sort((a, b) => a.bidValue - b.bidValue)[0];
     // ABC bid 141,000 — the lowest number on the table — and is not rank 1,
     // because freight and duty put its landed cost above Prime's.
@@ -72,7 +81,7 @@ describe('seed integrity', () => {
 
   it('stores a client timestamp that disagrees with the server one', () => {
     const state = fresh();
-    for (const seeded of state.auction.bids) {
+    for (const seeded of auctionOf(state).bids) {
       expect(seeded.clientTimestamp).not.toBe(seeded.submittedAt);
     }
   });
@@ -94,7 +103,7 @@ describe('bidding through the store', () => {
     state = bid(state, 'eb-global', 143_000);
 
     expect(state.lastBidResult?.accepted).toBe(true);
-    const rows = buyerView(state.auction, LOT, COUNTERPARTY_NAMES);
+    const rows = buyerView(auctionOf(state), LOT, COUNTERPARTY_NAMES);
     expect(rows[0].bidderId).toBe('eb-global');
   });
 
@@ -120,21 +129,21 @@ describe('bidding through the store', () => {
 
   it('writes a rejected attempt into the ledger as invalid', () => {
     let state = fresh();
-    const before = state.auction.bids.length;
+    const before = auctionOf(state).bids.length;
     // Global already holds a valid seeded bid, so this measures the delta.
-    const standingBefore = buyerView(state.auction, LOT, COUNTERPARTY_NAMES)
+    const standingBefore = buyerView(auctionOf(state), LOT, COUNTERPARTY_NAMES)
       .find((r) => r.bidderId === 'eb-global')!;
 
     state = bid(state, 'eb-global', 149_000);
 
     // The attempt is recorded — the ledger is the record of what was tried.
-    expect(state.auction.bids).toHaveLength(before + 1);
-    const last = state.auction.bids[state.auction.bids.length - 1];
+    expect(auctionOf(state).bids).toHaveLength(before + 1);
+    const last = auctionOf(state).bids[auctionOf(state).bids.length - 1];
     expect(last.isValid).toBe(false);
     expect(last.rejectionReason).toBeTruthy();
 
     // But an invalid bid changes nothing about the standing.
-    const standingAfter = buyerView(state.auction, LOT, COUNTERPARTY_NAMES)
+    const standingAfter = buyerView(auctionOf(state), LOT, COUNTERPARTY_NAMES)
       .find((r) => r.bidderId === 'eb-global')!;
     expect(standingAfter.bidCount).toBe(standingBefore.bidCount);
     expect(standingAfter.transformedValue).toBe(standingBefore.transformedValue);
@@ -143,11 +152,11 @@ describe('bidding through the store', () => {
 
   it('never mutates or removes an earlier bid — the ledger is append-only', () => {
     let state = fresh();
-    const original = JSON.parse(JSON.stringify(state.auction.bids));
+    const original = JSON.parse(JSON.stringify(auctionOf(state).bids));
     state = bid(state, 'eb-global', 143_000);
     state = bid(state, 'eb-abc', 138_000);
     for (const [i, before] of original.entries()) {
-      expect(state.auction.bids[i]).toEqual(before);
+      expect(auctionOf(state).bids[i]).toEqual(before);
     }
   });
 
@@ -156,22 +165,22 @@ describe('bidding through the store', () => {
     // Roughly a 13% improvement on the 147,200 lead: past the 10% threshold.
     state = bid(state, 'eb-global', 128_000);
     expect(state.lastBidResult?.requiresConfirmation).toBe(true);
-    expect(state.auction.bids).toHaveLength(5);
+    expect(auctionOf(state).bids).toHaveLength(5);
 
     state = bid(state, 'eb-global', 128_000, { confirmed: true });
     expect(state.lastBidResult?.accepted).toBe(true);
-    expect(state.auction.bids).toHaveLength(6);
+    expect(auctionOf(state).bids).toHaveLength(6);
   });
 
   it('refuses every bid while paused, and accepts again on resume', () => {
     let state = fresh();
-    state = reducer(state, { type: 'CONTROLLER_ACTION', action: 'PAUSE', reason: 'Integrity check.' });
-    expect(state.auction.auction.status).toBe('PAUSED');
+    state = reducer(state, { type: 'CONTROLLER_ACTION', eventId: PRIMARY_EVENT_ID, action: 'PAUSE', reason: 'Integrity check.' });
+    expect(auctionOf(state).auction.status).toBe('PAUSED');
 
     state = bid(state, 'eb-global', 143_000);
     expect(state.lastBidResult?.code).toBe('AUCTION_PAUSED');
 
-    state = reducer(state, { type: 'CONTROLLER_ACTION', action: 'RESUME', reason: 'Cleared.' });
+    state = reducer(state, { type: 'CONTROLLER_ACTION', eventId: PRIMARY_EVENT_ID, action: 'RESUME', reason: 'Cleared.' });
     state = bid(state, 'eb-global', 143_000);
     expect(state.lastBidResult?.accepted).toBe(true);
   });
@@ -179,38 +188,38 @@ describe('bidding through the store', () => {
   it('refuses a bid while the connection is down rather than pretending', () => {
     let state = fresh();
     state = reducer(state, { type: 'TOGGLE_CONNECTION' });
-    const before = state.auction.bids.length;
+    const before = auctionOf(state).bids.length;
     state = bid(state, 'eb-global', 143_000);
     expect(state.lastBidResult?.accepted).toBe(false);
     expect(state.lastBidResult?.code).toBe('OFFLINE');
     // Nothing reached the ledger, because nothing reached the server.
-    expect(state.auction.bids).toHaveLength(before);
+    expect(auctionOf(state).bids).toHaveLength(before);
   });
 
   it('extends the clock when a bid lands in the soft-close window', () => {
     let state = fresh();
-    const closesAt = state.auction.lots[0].closesAt!;
+    const closesAt = auctionOf(state).lots[0].closesAt!;
     // Advance the server clock to 60s before the close.
     setServerOffset(closesAt - Date.now() - 60_000);
 
     state = bid(state, 'eb-global', 143_000);
     expect(state.lastBidResult?.accepted).toBe(true);
-    expect(state.auction.auction.status).toBe('EXTENDED');
-    expect(state.auction.auction.extensionsUsed).toBe(1);
-    expect(state.auction.lots[0].closesAt!).toBe(closesAt + 120_000);
-    expect(state.auction.controlEvents[0].kind).toBe('EXTENDED');
+    expect(auctionOf(state).auction.status).toBe('EXTENDED');
+    expect(auctionOf(state).auction.extensionsUsed).toBe(1);
+    expect(auctionOf(state).lots[0].closesAt!).toBe(closesAt + 120_000);
+    expect(auctionOf(state).controlEvents[0].kind).toBe('EXTENDED');
     // A system extension is attributed to the system, not to a person.
-    expect(state.auction.controlEvents[0].actorId).toBe('system');
+    expect(auctionOf(state).controlEvents[0].actorId).toBe('system');
   });
 
   it('records an on-behalf bid with its marker', () => {
     let state = fresh();
     state = reducer(state, {
-      type: 'SUBMIT_BID', auctionLotId: LOT, bidderId: 'eb-abc',
+      type: 'SUBMIT_BID', eventId: PRIMARY_EVENT_ID, auctionLotId: LOT, bidderId: 'eb-abc',
       bidValue: 140_000, userId: 'user-ar', source: 'ON_BEHALF',
       onBehalfReason: 'Supplier phoned; portal unreachable', confirmed: true,
     });
-    const placed = state.auction.bids[state.auction.bids.length - 1];
+    const placed = auctionOf(state).bids[auctionOf(state).bids.length - 1];
     expect(placed.source).toBe('ON_BEHALF');
     expect(placed.onBehalfReason).toBe('Supplier phoned; portal unreachable');
   });
@@ -219,20 +228,20 @@ describe('bidding through the store', () => {
 describe('controller actions', () => {
   it('refuses an action with no reason', () => {
     const state = fresh();
-    expect(() => reducer(state, { type: 'CONTROLLER_ACTION', action: 'PAUSE', reason: '   ' }))
+    expect(() => reducer(state, { type: 'CONTROLLER_ACTION', eventId: PRIMARY_EVENT_ID, action: 'PAUSE', reason: '   ' }))
       .toThrow(/reason/i);
   });
 
   it('writes the audit entry, and closing ends every lot', () => {
     let state = fresh();
     state = reducer(state, {
-      type: 'CONTROLLER_ACTION', action: 'FORCE_CLOSE',
+      type: 'CONTROLLER_ACTION', eventId: PRIMARY_EVENT_ID, action: 'FORCE_CLOSE',
       reason: 'Buyer ended bidding early with agreement of the field.',
     });
-    expect(state.auction.auction.status).toBe('CLOSED');
-    expect(state.auction.lots.every((l) => l.status === 'LOT_CLOSED')).toBe(true);
+    expect(auctionOf(state).auction.status).toBe('CLOSED');
+    expect(auctionOf(state).lots.every((l) => l.status === 'LOT_CLOSED')).toBe(true);
 
-    const trail = auditTrail(state.auction.auction.eventId);
+    const trail = auditTrail(auctionOf(state).auction.eventId);
     const entry = trail.find((e) => e.action === 'AUCTION_FORCE_CLOSED');
     expect(entry).toBeDefined();
     expect(entry!.reason).toContain('ended bidding early');
@@ -240,7 +249,7 @@ describe('controller actions', () => {
 
   it('stops accepting bids once closed', () => {
     let state = fresh();
-    state = reducer(state, { type: 'CONTROLLER_ACTION', action: 'FORCE_CLOSE', reason: 'Time.' });
+    state = reducer(state, { type: 'CONTROLLER_ACTION', eventId: PRIMARY_EVENT_ID, action: 'FORCE_CLOSE', reason: 'Time.' });
     state = bid(state, 'eb-global', 130_000);
     expect(state.lastBidResult?.code).toBe('AUCTION_NOT_LIVE');
   });
@@ -249,7 +258,7 @@ describe('controller actions', () => {
 describe('the two surfaces see different things from one ledger', () => {
   it('gives the buyer real names and both values', () => {
     const state = fresh();
-    const rows = buyerView(state.auction, LOT, COUNTERPARTY_NAMES);
+    const rows = buyerView(auctionOf(state), LOT, COUNTERPARTY_NAMES);
     expect(rows[0].displayName).toBe('Prime Stationery Ltd.');
     expect(rows[0].bidValue).toBeGreaterThan(0);
     expect(rows[0].transformedValue).toBeGreaterThan(0);
@@ -257,7 +266,7 @@ describe('the two surfaces see different things from one ledger', () => {
 
   it('masks names for an observer', () => {
     const state = fresh();
-    const rows = buyerView(state.auction, LOT, COUNTERPARTY_NAMES, { observer: true });
+    const rows = buyerView(auctionOf(state), LOT, COUNTERPARTY_NAMES, { observer: true });
     expect(rows.map((r) => r.displayName)).toEqual(
       expect.arrayContaining(['Bidder A', 'Bidder B', 'Bidder C']),
     );
@@ -268,7 +277,7 @@ describe('the two surfaces see different things from one ledger', () => {
 
   it('shows a registered bidder who has not bid, so silence is visible', () => {
     const state = fresh();
-    const rows = buyerView(state.auction, LOT, COUNTERPARTY_NAMES);
+    const rows = buyerView(auctionOf(state), LOT, COUNTERPARTY_NAMES);
     const metro = rows.find((r) => r.bidderId === 'eb-metro');
     expect(metro).toBeDefined();
     expect(metro!.bidCount).toBe(0);
@@ -277,7 +286,7 @@ describe('the two surfaces see different things from one ledger', () => {
 
   it('gives the supplier only what RANK_GAP permits — no competitor price', () => {
     const state = fresh();
-    const view = bidderView(state.auction, LOT, PORTAL_BIDDER_ID, COUNTERPARTY_NAMES);
+    const view = bidderView(auctionOf(state), LOT, PORTAL_BIDDER_ID, COUNTERPARTY_NAMES);
     expect(view.projection.ownRank).toBeDefined();
     expect(view.projection.gapPctBehind).toBeDefined();
     expect(view.projection).not.toHaveProperty('bestPrice');
@@ -291,23 +300,23 @@ describe('the two surfaces see different things from one ledger', () => {
 
   it('changes the payload shape when the policy changes, not just the display', () => {
     let state = fresh();
-    const before = bidderView(state.auction, LOT, PORTAL_BIDDER_ID, COUNTERPARTY_NAMES);
+    const before = bidderView(auctionOf(state), LOT, PORTAL_BIDDER_ID, COUNTERPARTY_NAMES);
     expect(before.projection).not.toHaveProperty('bestPrice');
 
-    state = reducer(state, { type: 'UPDATE_AUCTION', patch: { feedbackPolicy: 'FULL_PRICE' } });
-    const after = bidderView(state.auction, LOT, PORTAL_BIDDER_ID, COUNTERPARTY_NAMES);
+    state = reducer(state, { type: 'UPDATE_AUCTION', eventId: PRIMARY_EVENT_ID, patch: { feedbackPolicy: 'FULL_PRICE' } });
+    const after = bidderView(auctionOf(state), LOT, PORTAL_BIDDER_ID, COUNTERPARTY_NAMES);
     expect(after.projection.bestPrice).toBe(147_200);
     expect(after.projection.allBids).toHaveLength(3);
 
-    state = reducer(state, { type: 'UPDATE_AUCTION', patch: { feedbackPolicy: 'BLIND' } });
-    const blind = bidderView(state.auction, LOT, PORTAL_BIDDER_ID, COUNTERPARTY_NAMES);
+    state = reducer(state, { type: 'UPDATE_AUCTION', eventId: PRIMARY_EVENT_ID, patch: { feedbackPolicy: 'BLIND' } });
+    const blind = bidderView(auctionOf(state), LOT, PORTAL_BIDDER_ID, COUNTERPARTY_NAMES);
     expect(Object.keys(blind.projection).sort()).toEqual(['isLeading', 'policy', 'policyLabel']);
   });
 
   it('never leaks the internal target price, even under traffic light', () => {
     let state = fresh();
-    state = reducer(state, { type: 'UPDATE_AUCTION', patch: { feedbackPolicy: 'TRAFFIC_LIGHT' } });
-    const view = bidderView(state.auction, LOT, PORTAL_BIDDER_ID, COUNTERPARTY_NAMES);
+    state = reducer(state, { type: 'UPDATE_AUCTION', eventId: PRIMARY_EVENT_ID, patch: { feedbackPolicy: 'TRAFFIC_LIGHT' } });
+    const view = bidderView(auctionOf(state), LOT, PORTAL_BIDDER_ID, COUNTERPARTY_NAMES);
     expect(view.projection.trafficBand).toBeDefined();
     // discloseTarget is false on the seed, so the number stays behind the boundary.
     expect(view.projection).not.toHaveProperty('targetPrice');
@@ -317,8 +326,8 @@ describe('the two surfaces see different things from one ledger', () => {
   it('always lets a supplier see their own bids, whatever the policy', () => {
     let state = fresh();
     for (const policy of ['BLIND', 'RANK_ONLY', 'FULL_PRICE'] as const) {
-      state = reducer(state, { type: 'UPDATE_AUCTION', patch: { feedbackPolicy: policy } });
-      const view = bidderView(state.auction, LOT, PORTAL_BIDDER_ID, COUNTERPARTY_NAMES);
+      state = reducer(state, { type: 'UPDATE_AUCTION', eventId: PRIMARY_EVENT_ID, patch: { feedbackPolicy: policy } });
+      const view = bidderView(auctionOf(state), LOT, PORTAL_BIDDER_ID, COUNTERPARTY_NAMES);
       expect(view.myBestBid).toBe(141_000);
       expect(view.myBidHistory.length).toBeGreaterThan(0);
     }
@@ -326,8 +335,8 @@ describe('the two surfaces see different things from one ledger', () => {
 
   it('gives two suppliers different bid-to-beat figures for one objective', () => {
     const state = fresh();
-    const abc = bidderView(state.auction, LOT, 'eb-abc', COUNTERPARTY_NAMES);
-    const global = bidderView(state.auction, LOT, 'eb-global', COUNTERPARTY_NAMES);
+    const abc = bidderView(auctionOf(state), LOT, 'eb-abc', COUNTERPARTY_NAMES);
+    const global = bidderView(auctionOf(state), LOT, 'eb-global', COUNTERPARTY_NAMES);
     expect(abc.bidToBeat).not.toBeNull();
     expect(global.bidToBeat).not.toBeNull();
     // Same leading landed value, different raw targets, because their costs differ.

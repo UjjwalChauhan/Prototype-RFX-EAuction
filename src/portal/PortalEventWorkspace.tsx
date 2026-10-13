@@ -12,7 +12,7 @@ import {
 } from '../design-system/components/primitives';
 import { Modal, ValidationBanner } from '../design-system/components/domain';
 import { formatCountdown, serverNow } from '../server/clock';
-import { useStore } from '../store/store';
+import { auctionFor, useStore } from '../store/store';
 import {
   LINE_ITEMS, PORTAL_BIDDER_ID, PRIMARY_EVENT_ID, QUESTIONNAIRE, QUESTION_SECTIONS,
 } from '../data/seed';
@@ -42,7 +42,8 @@ export function PortalEventWorkspace({ onNavigate }: { onNavigate: (route: Porta
   const [saved, setSaved] = React.useState<number | null>(null);
 
   const auctionLive =
-    state.auction.auction.status === 'LIVE' || state.auction.auction.status === 'EXTENDED';
+    auctionFor(state, PRIMARY_EVENT_ID)?.auction.status === 'LIVE'
+    || auctionFor(state, PRIMARY_EVENT_ID)?.auction.status === 'EXTENDED';
   const submitted = bidder.participationStatus === 'SUBMITTED' || receipt !== null;
 
   // Autosave: the supplier never loses work to a closed tab.

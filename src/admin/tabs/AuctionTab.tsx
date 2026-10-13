@@ -6,7 +6,7 @@
  * from — publishing it here is what stops a leak downstream.
  */
 import React from 'react';
-import { color, money, pct, radius, savingsColor, signedMoney } from '../../design-system/tokens';
+import { color, currencySymbol, money, pct, radius, savingsColor, signedMoney } from '../../design-system/tokens';
 import {
   Button, Chip, CurrencyInput, Field, NumberInput, Pill, Radio, Segmented, Toggle,
 } from '../../design-system/components/primitives';
@@ -17,24 +17,42 @@ import {
 import { AUCTION_STATUS_PRESENTATION, PARTICIPATION_STATUS_PRESENTATION } from '../../domain/statusMachine';
 import { VISIBILITY_MANIFEST } from '../../domain/feedbackPolicy';
 import {
+  rehearsalBriefing, rehearsalOpen, rehearsalOpenedAt,
+} from '../../domain/auctionRehearsal';
+import { activityFeed, progressFor } from '../../domain/auctionProgress';
+import { ActivityFeed, PriceChart, Stat } from '../../design-system/components/auctionProgress';
+import {
   checkCanStart, mechanismGuidance, MECHANISM_DURATION_DEFAULTS,
 } from '../../domain/auctionEngine';
-import { deriveDirection, directionLabel, improvementLabel } from '../../domain/comparator';
+import { deriveDirection, directionLabel } from '../../domain/comparator';
 import { buyerView } from '../../server/auctionService';
 import { formatCountdown, serverNow } from '../../server/clock';
-import { biddersForEvent, lotsForEvent, useStore } from '../../store/store';
-import { COUNTERPARTY_NAMES } from '../../data/seed';
+import { auctionFor, biddersForEvent, lotsForEvent, useStore } from '../../store/store';
+import { COUNTERPARTY_NAMES, PRIMARY_EVENT_ID } from '../../data/seed';
 import { forbiddenReason } from '../../domain/agents';
+import {
+  MECHANISM_PROFILE, bidderRules, howItWorks, mechanismIssues,
+} from '../../domain/auctionMechanics';
+import {
+  patchSetting, readSetting, settingsFor, settingsWithdrawn,
+  type AuctionSetting, type SettingGroup, type SettingKey, type SettingKind,
+} from '../../domain/auctionRules';
+import {
+  MechanismBriefing, MechanismControls, MechanismState, mechanismColumns, rankingNotice,
+} from './AuctionMechanismPanels';
+import type { ActionSpec } from '../../domain/auctionMechanics';
 import type {
-  AuctionMechanism, ClosePolicy, FeedbackPolicy, IdentityPolicy, LotStrategy,
+  Auction, AuctionMechanism, ClosePolicy, DecrementType, FeedbackPolicy, IdentityPolicy,
+  LotStrategy,
 } from '../../domain/types';
 
 type Pane = 'setup' | 'lobby' | 'cockpit' | 'results';
 
 export function AuctionTab({ eventId }: { eventId: string }) {
   const { state } = useStore();
-  const auction = state.auction.auction;
-  const isThisEvent = auction.eventId === eventId;
+  const held = auctionFor(state, eventId);
+  const isThisEvent = held !== null;
+  const auction = held?.auction ?? state.auctions[PRIMARY_EVENT_ID].auction;
 
   const initialPane: Pane =
     !isThisEvent ? 'setup'
@@ -75,6 +93,21 @@ export function AuctionTab({ eventId }: { eventId: string }) {
           presentation={AUCTION_STATUS_PRESENTATION[auction.status]}
           live={auction.status === 'LIVE' || auction.status === 'EXTENDED'}
         />
+        {/* The reference, on every pane. It is what the supplier's screen
+            shows them, so the controller taking a call about "EA-2026-0006"
+            is looking at the same string. */}
+        {isThisEvent && (
+          <span
+            title="Auction reference — the same one the supplier sees"
+            style={{
+              marginLeft: 'auto', fontSize: 12, fontWeight: 600,
+              color: color.textSecondary, fontVariantNumeric: 'tabular-nums',
+              padding: '3px 9px', borderRadius: radius.pill, background: color.neutralSoft,
+            }}
+          >
+            {auction.auctionNumber}
+          </span>
+        )}
       </div>
 
       {pane === 'setup' && <AuctionSetup eventId={eventId} />}
@@ -90,9 +123,11 @@ export function AuctionTab({ eventId }: { eventId: string }) {
 // ---------------------------------------------------------------------------
 
 function AuctionSetup({ eventId }: { eventId: string }) {
+  const { state: store } = useStore();
+  const held = auctionFor(store, eventId)!;
   const { state, dispatch } = useStore();
   const event = state.events.find((e) => e.id === eventId)!;
-  const auction = state.auction.auction;
+  const auction = held.auction;
   const bidders = biddersForEvent(state, eventId);
   const lots = lotsForEvent(state, eventId);
 
@@ -137,7 +172,7 @@ function AuctionSetup({ eventId }: { eventId: string }) {
               <Radio
                 key={m.key}
                 checked={auction.mechanism === m.key}
-                onChange={() => dispatch({ type: 'UPDATE_AUCTION', patch: { mechanism: m.key } })}
+                onChange={() => dispatch({ type: 'UPDATE_AUCTION', eventId, patch: { mechanism: m.key } })}
                 label={m.name}
                 hint={m.desc}
                 disabled={m.off && auction.mechanism !== m.key}
@@ -153,6 +188,38 @@ function AuctionSetup({ eventId }: { eventId: string }) {
               </ValidationBanner>
             </div>
           )}
+
+          {/* Settings this mechanism cannot honour. Distinct from "is it ready
+              to start": this asks whether what is configured describes an
+              auction that can exist. */}
+          {mechanismIssues(auction).map((issue) => (
+            <div key={issue.field + issue.message} style={{ marginTop: 10 }}>
+              <ValidationBanner
+                tone={issue.blocking ? 'error' : 'warning'}
+                title={issue.blocking ? 'This configuration contradicts itself' : 'Worth knowing'}
+              >
+                {issue.message}
+              </ValidationBanner>
+            </div>
+          ))}
+
+          {/* Regenerated on every change. Switch from best-price to blind and
+              this text changes, because help that does not track the settings
+              is worse than none — it is believed. */}
+          <div
+            style={{
+              marginTop: 12, padding: '12px 14px', background: color.brandPrimarySoft,
+              borderRadius: radius.control,
+            }}
+          >
+            <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>
+              How this auction runs, as configured
+            </div>
+            <MechanismBriefing held={held} />
+            <ul style={{ margin: '8px 0 0', paddingLeft: 16, fontSize: 12, lineHeight: 1.7 }}>
+              {howItWorks(auction).map((line) => <li key={line}>{line}</li>)}
+            </ul>
+          </div>
         </Card>
 
         <Card
@@ -160,15 +227,29 @@ function AuctionSetup({ eventId }: { eventId: string }) {
           hint="A first-class lever, and a data boundary — the server sends a bidder only what the policy permits."
         >
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(min(210px, 100%), 1fr))', gap: 8 }}>
-            {policies.map((p) => (
-              <Radio
-                key={p.key}
-                checked={auction.feedbackPolicy === p.key}
-                onChange={() => dispatch({ type: 'UPDATE_AUCTION', patch: { feedbackPolicy: p.key } })}
-                label={p.name}
-                hint={p.desc}
-              />
-            ))}
+            {policies.map((p) => {
+              /**
+               * Some pairings are not merely unwise. Telling a Dutch bidder
+               * their rank describes a ranking the format does not have, and
+               * a traffic-light auction whose feedback is full price is not a
+               * traffic-light auction. Offered and then refused by the server
+               * is a worse experience than not offered, so the table that
+               * decides it is read here too.
+               */
+              const forbidden = MECHANISM_PROFILE[auction.mechanism].incompatibleFeedback.includes(p.key);
+              return (
+                <Radio
+                  key={p.key}
+                  checked={auction.feedbackPolicy === p.key}
+                  onChange={() => dispatch({ type: 'UPDATE_AUCTION', eventId, patch: { feedbackPolicy: p.key } })}
+                  label={p.name}
+                  hint={forbidden
+                    ? `Not available in a ${MECHANISM_PROFILE[auction.mechanism].label} auction — ${p.desc.toLowerCase()}`
+                    : p.desc}
+                  disabled={forbidden}
+                />
+              );
+            })}
           </div>
 
           <div
@@ -190,7 +271,7 @@ function AuctionSetup({ eventId }: { eventId: string }) {
               <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>Strategy</div>
               <Segmented
                 value={auction.lotStrategy}
-                onChange={(lotStrategy: LotStrategy) => dispatch({ type: 'UPDATE_AUCTION', patch: { lotStrategy } })}
+                onChange={(lotStrategy: LotStrategy) => dispatch({ type: 'UPDATE_AUCTION', eventId, patch: { lotStrategy } })}
                 options={[
                   { value: 'INDEPENDENT', label: 'Independent' },
                   { value: 'SERIAL', label: 'Serial' },
@@ -203,7 +284,7 @@ function AuctionSetup({ eventId }: { eventId: string }) {
               <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>Close policy</div>
               <Segmented
                 value={auction.closePolicy}
-                onChange={(closePolicy: ClosePolicy) => dispatch({ type: 'UPDATE_AUCTION', patch: { closePolicy } })}
+                onChange={(closePolicy: ClosePolicy) => dispatch({ type: 'UPDATE_AUCTION', eventId, patch: { closePolicy } })}
                 options={[
                   { value: 'HARD', label: 'Hard' },
                   { value: 'SOFT_EXTENSION', label: 'Soft extension' },
@@ -224,7 +305,7 @@ function AuctionSetup({ eventId }: { eventId: string }) {
               <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>Identity policy</div>
               <Segmented
                 value={auction.identityPolicy}
-                onChange={(identityPolicy: IdentityPolicy) => dispatch({ type: 'UPDATE_AUCTION', patch: { identityPolicy } })}
+                onChange={(identityPolicy: IdentityPolicy) => dispatch({ type: 'UPDATE_AUCTION', eventId, patch: { identityPolicy } })}
                 options={[
                   { value: 'MASKED', label: 'Masked — Bidder A, B, C' },
                   { value: 'NAMED', label: 'Named' },
@@ -234,147 +315,25 @@ function AuctionSetup({ eventId }: { eventId: string }) {
           </div>
         </Card>
 
-        <Card title="Anti-gaming controls" hint="Standard equipment, not optional extras.">
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(190px, 100%), 1fr))', gap: 12 }}>
-            <Field label={`Minimum ${improvementLabel(auction.side)}`} hint="Prevents penny bidding.">
-              <div style={{ display: 'flex', gap: 6 }}>
-                <NumberInput
-                  value={auction.antiGaming.minDecrement}
-                  step="0.1"
-                  onChange={(e) =>
-                    dispatch({
-                      type: 'UPDATE_AUCTION',
-                      patch: { antiGaming: { ...auction.antiGaming, minDecrement: Number(e.target.value) } },
-                    })
-                  }
-                />
-                <Segmented
-                  size="small"
-                  value={auction.antiGaming.minDecrementType}
-                  onChange={(minDecrementType) =>
-                    dispatch({
-                      type: 'UPDATE_AUCTION',
-                      patch: { antiGaming: { ...auction.antiGaming, minDecrementType } },
-                    })
-                  }
-                  options={[{ value: 'PCT', label: '%' }, { value: 'ABSOLUTE', label: '$' }]}
-                />
-              </div>
-            </Field>
-            <Field label="Maximum improvement guard (%)" hint="Fat-finger and gaming protection.">
-              <NumberInput
-                value={auction.antiGaming.maxDecrementPct}
-                onChange={(e) =>
-                  dispatch({
-                    type: 'UPDATE_AUCTION',
-                    patch: { antiGaming: { ...auction.antiGaming, maxDecrementPct: Number(e.target.value) } },
-                  })
-                }
-              />
-            </Field>
-            <Field label="Front buffer (%)" hint="A band ahead of the lead in which bids are rejected.">
-              <NumberInput
-                value={auction.antiGaming.frontBufferPct}
-                onChange={(e) =>
-                  dispatch({
-                    type: 'UPDATE_AUCTION',
-                    patch: { antiGaming: { ...auction.antiGaming, frontBufferPct: Number(e.target.value) } },
-                  })
-                }
-              />
-            </Field>
-            <Field label="Soft close trigger (sec)">
-              <NumberInput
-                value={auction.antiGaming.softCloseTriggerSec}
-                onChange={(e) =>
-                  dispatch({
-                    type: 'UPDATE_AUCTION',
-                    patch: { antiGaming: { ...auction.antiGaming, softCloseTriggerSec: Number(e.target.value) } },
-                  })
-                }
-              />
-            </Field>
-            <Field label="Extension length (sec)">
-              <NumberInput
-                value={auction.antiGaming.softCloseExtensionSec}
-                onChange={(e) =>
-                  dispatch({
-                    type: 'UPDATE_AUCTION',
-                    patch: { antiGaming: { ...auction.antiGaming, softCloseExtensionSec: Number(e.target.value) } },
-                  })
-                }
-              />
-            </Field>
-            <Field label="Minimum bidders to start">
-              <NumberInput
-                value={auction.antiGaming.minBiddersToStart}
-                onChange={(e) =>
-                  dispatch({
-                    type: 'UPDATE_AUCTION',
-                    patch: { antiGaming: { ...auction.antiGaming, minBiddersToStart: Number(e.target.value) } },
-                  })
-                }
-              />
-            </Field>
-            <Field label="Typed confirmation above (%)">
-              <NumberInput
-                value={auction.antiGaming.confirmThresholdPct}
-                onChange={(e) =>
-                  dispatch({
-                    type: 'UPDATE_AUCTION',
-                    patch: { antiGaming: { ...auction.antiGaming, confirmThresholdPct: Number(e.target.value) } },
-                  })
-                }
-              />
-            </Field>
-            <Field label="Tie-bid policy">
-              <Segmented
-                size="small"
-                value={auction.antiGaming.tieBidPolicy}
-                onChange={(tieBidPolicy) =>
-                  dispatch({
-                    type: 'UPDATE_AUCTION',
-                    patch: { antiGaming: { ...auction.antiGaming, tieBidPolicy } },
-                  })
-                }
-                options={[
-                  { value: 'FIRST_IN_WINS', label: 'First in' },
-                  { value: 'SPLIT', label: 'Split' },
-                  { value: 'TIE_BREAK_ROUND', label: 'Tie-break' },
-                  { value: 'BUYER_DECIDES', label: 'Buyer' },
-                ]}
-              />
-            </Field>
-          </div>
+        <SettingsCard
+          eventId={eventId}
+          auction={auction}
+          currency={event.currency}
+          group="CONDUCT"
+          title="Rules of conduct"
+          hint="What a bidder may and may not do. Enforced at the server, not in the page."
+        />
 
-          <div className="rfx-stack" style={{ marginTop: 14, gap: 9 }}>
-            {/* Permanently-disabled controls, shown so the boundary is visible. */}
-            <Toggle
-              checked={false}
-              onChange={() => undefined}
-              disabled
-              disabledReason="Bid withdrawal is never permitted. The ledger is append-only; a correction is a new row."
-              label="Allow bid withdrawal"
-            />
-            <Toggle
-              checked={false}
-              onChange={() => undefined}
-              disabled
-              disabledReason="Bidding against your own leading bid is never permitted."
-              label="Allow rebid on own leading bid"
-            />
-            <Toggle
-              checked={auction.antiGaming.requireDryRunFirstEvent}
-              onChange={(requireDryRunFirstEvent) =>
-                dispatch({
-                  type: 'UPDATE_AUCTION',
-                  patch: { antiGaming: { ...auction.antiGaming, requireDryRunFirstEvent } },
-                })
-              }
-              label="Require a dry run before a supplier's first live auction"
-            />
-          </div>
-        </Card>
+        <SettingsCard
+          eventId={eventId}
+          auction={auction}
+          currency={event.currency}
+          group="PARAMETER"
+          title={`${MECHANISM_PROFILE[auction.mechanism].label} parameters`}
+          hint="Settings that exist only for this mechanism. Change the mechanism and these change with it."
+        />
+
+        <WithdrawnSettings auction={auction} />
       </div>
 
       <div className="rfx-stack" style={{ gap: 12 }}>
@@ -383,7 +342,7 @@ function AuctionSetup({ eventId }: { eventId: string }) {
             <div>
               <div style={{ fontSize: 11, color: color.textSecondary }}>Starting price</div>
               <div style={{ fontSize: 19, fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>
-                {money(state.auction.lots[0]?.startingPrice ?? 0, event.currency)}
+                {money(held.lots[0]?.startingPrice ?? 0, event.currency)}
               </div>
               <div style={{ fontSize: 11, color: color.textSecondary, marginTop: 3 }}>
                 Source: {auction.startingPriceSource}
@@ -404,7 +363,7 @@ function AuctionSetup({ eventId }: { eventId: string }) {
             </div>
             <Toggle
               checked={auction.discloseTarget}
-              onChange={(discloseTarget) => dispatch({ type: 'UPDATE_AUCTION', patch: { discloseTarget } })}
+              onChange={(discloseTarget) => dispatch({ type: 'UPDATE_AUCTION', eventId, patch: { discloseTarget } })}
               label="Disclose the target number to bidders"
             />
           </div>
@@ -415,7 +374,7 @@ function AuctionSetup({ eventId }: { eventId: string }) {
             <Segmented
               size="small"
               value={auction.transformation}
-              onChange={(transformation) => dispatch({ type: 'UPDATE_AUCTION', patch: { transformation } })}
+              onChange={(transformation) => dispatch({ type: 'UPDATE_AUCTION', eventId, patch: { transformation } })}
               options={[
                 { value: 'NONE', label: 'None' },
                 { value: 'SUPPLIER_SPECIFIC', label: 'Supplier specific' },
@@ -427,7 +386,7 @@ function AuctionSetup({ eventId }: { eventId: string }) {
               value is transformed back into their own terms. The adjustment itself is never shown.
             </div>
             <div className="rfx-stack" style={{ gap: 5 }}>
-              {state.auction.costComponents.map((component) => (
+              {held.costComponents.map((component) => (
                 <div key={component.id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11.5 }}>
                   <span style={{ color: color.textSecondary }}>{component.name}</span>
                   <span style={{ display: 'inline-flex', gap: 5, alignItems: 'center' }}>
@@ -443,13 +402,224 @@ function AuctionSetup({ eventId }: { eventId: string }) {
         <Card title="Proxy bidding">
           <Toggle
             checked={auction.proxyBidding}
-            onChange={(proxyBidding) => dispatch({ type: 'UPDATE_AUCTION', patch: { proxyBidding } })}
+            onChange={(proxyBidding) => dispatch({ type: 'UPDATE_AUCTION', eventId, patch: { proxyBidding } })}
             disabled={auction.clockOwner !== 'BIDDER'}
             disabledReason={auction.clockOwner !== 'BIDDER' ? 'Proxy bidding only applies where the bidder owns the clock.' : undefined}
             label={auction.proxyBidding ? 'Enabled — a ceiling is mandatory' : 'Disabled'}
           />
         </Card>
       </div>
+    </div>
+  );
+}
+
+/**
+ * One group of settings, rendered from the rulebook rather than written out.
+ *
+ * Which controls appear is decided by `settingsFor`, so a Dutch auction does
+ * not show a soft-close trigger it cannot fire and does show the clock tick it
+ * runs on. Every control carries both halves of its explanation: what it does,
+ * and what goes wrong without it. The second half is the one a buyer needs to
+ * pick a number rather than accept the default, and it is the one a tooltip
+ * usually leaves out.
+ */
+function SettingsCard({
+  eventId, auction, currency, group, title, hint,
+}: {
+  eventId: string;
+  auction: Auction;
+  currency: string;
+  group: SettingGroup;
+  title: string;
+  hint: string;
+}) {
+  const { dispatch } = useStore();
+  const settings = settingsFor(auction, group);
+  if (settings.length === 0) {
+    return (
+      <Card title={title} hint={hint}>
+        <div style={{ fontSize: 12.5, color: color.textSecondary, lineHeight: 1.6 }}>
+          {MECHANISM_PROFILE[auction.mechanism].label} has no settings of its own — it runs on the
+          rules of conduct above and the clock the timeline gives it.
+        </div>
+      </Card>
+    );
+  }
+
+  const set = (key: SettingKey, value: number | boolean | string) =>
+    dispatch({ type: 'UPDATE_AUCTION', eventId, patch: patchSetting(auction, key, value) });
+
+  const numeric = settings.filter((s) => s.kind !== 'BOOLEAN');
+  const switches = settings.filter((s) => s.kind === 'BOOLEAN');
+
+  return (
+    <Card title={title} hint={hint}>
+      {numeric.length > 0 && (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(220px, 100%), 1fr))', gap: 14 }}>
+          {numeric.map((setting) => (
+            <SettingField
+              key={setting.key}
+              setting={setting}
+              auction={auction}
+              currency={currency}
+              onChange={(value) => set(setting.key, value)}
+              onTypeChange={(minDecrementType) =>
+                dispatch({
+                  type: 'UPDATE_AUCTION',
+                  eventId,
+                  patch: { antiGaming: { ...auction.antiGaming, minDecrementType } },
+                })}
+            />
+          ))}
+        </div>
+      )}
+
+      {switches.length > 0 && (
+        <div className="rfx-stack" style={{ marginTop: numeric.length > 0 ? 16 : 0, gap: 12 }}>
+          {switches.map((setting) => (
+            <div key={setting.key}>
+              <Toggle
+                checked={setting.locked ? false : Boolean(readSetting(auction, setting.key))}
+                onChange={(value) => { if (!setting.locked) set(setting.key, value); }}
+                disabled={setting.locked !== undefined}
+                disabledReason={setting.locked}
+                label={setting.label(auction)}
+              />
+              <SettingNote setting={setting} auction={auction} />
+            </div>
+          ))}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+/** One control, with its unit, its bounds and both halves of its explanation. */
+function SettingField({
+  setting, auction, currency, onChange, onTypeChange,
+}: {
+  setting: AuctionSetting;
+  auction: Auction;
+  currency: string;
+  onChange: (value: number | string) => void;
+  /** Only the decrement carries a unit the buyer chooses alongside the number. */
+  onTypeChange: (type: DecrementType) => void;
+}) {
+  const value = readSetting(auction, setting.key);
+
+  return (
+    // The note sits outside the Field on purpose: Field is a <label>, and a
+    // button inside one is a click that focuses the input instead.
+    <div>
+    <Field label={setting.label(auction)} hint={setting.hint(auction)}>
+      {setting.kind === 'CHOICE' ? (
+        <Segmented
+          size="small"
+          value={String(value)}
+          onChange={(next: string) => onChange(next)}
+          options={setting.options ?? []}
+        />
+      ) : setting.kind === 'DECREMENT' ? (
+        <div style={{ display: 'flex', gap: 6 }}>
+          <NumberInput
+            value={Number(value)}
+            step={setting.step ?? 0.1}
+            min={setting.min}
+            max={setting.max}
+            onChange={(e) => onChange(Number(e.target.value))}
+          />
+          <Segmented
+            size="small"
+            value={auction.antiGaming.minDecrementType}
+            onChange={(minDecrementType: DecrementType) => onTypeChange(minDecrementType)}
+            options={[
+              { value: 'PCT', label: '%' },
+              { value: 'ABSOLUTE', label: currencySymbol(currency) },
+            ]}
+          />
+        </div>
+      ) : (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+          <NumberInput
+            value={Number(value)}
+            min={setting.min}
+            max={setting.max}
+            step={setting.step}
+            onChange={(e) => onChange(Number(e.target.value))}
+          />
+          <span style={{ fontSize: 11.5, color: color.textSecondary, whiteSpace: 'nowrap' }}>
+            {UNIT_LABEL[setting.kind]}
+          </span>
+        </div>
+      )}
+    </Field>
+    <SettingNote setting={setting} auction={auction} />
+    </div>
+  );
+}
+
+const UNIT_LABEL: Record<SettingKind, string> = {
+  DECREMENT: '', PERCENT: '%', SECONDS: 'sec', COUNT: '', BOOLEAN: '', CHOICE: '',
+};
+
+/**
+ * The "why" line.
+ *
+ * Collapsed by default so the pane stays a working surface rather than a
+ * manual, and one click from every control so it is never somewhere else.
+ */
+function SettingNote({ setting, auction }: { setting: AuctionSetting; auction: Auction }) {
+  const [open, setOpen] = React.useState(false);
+  return (
+    <div style={{ marginTop: 5 }}>
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        style={{
+          border: 'none', background: 'none', padding: 0, cursor: 'pointer',
+          font: 'inherit', fontSize: 11, color: color.brandPrimary,
+        }}
+      >
+        {open ? 'Hide' : 'Why this matters'}
+      </button>
+      {open && (
+        <div
+          style={{
+            marginTop: 5, padding: '8px 10px', borderRadius: radius.control,
+            background: color.brandPrimarySoft, fontSize: 11.5, lineHeight: 1.6,
+            color: color.textBody,
+          }}
+        >
+          {setting.why(auction)}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * What this mechanism does not use.
+ *
+ * A buyer who has run English auctions all year and switches to Dutch will
+ * look for the soft-close fields. Saying where they went is cheaper than
+ * leaving them on screen doing nothing.
+ */
+function WithdrawnSettings({ auction }: { auction: Auction }) {
+  const gone = settingsWithdrawn(auction).filter((setting) => setting.group === 'CONDUCT');
+  if (gone.length === 0) return null;
+  return (
+    <div
+      style={{
+        fontSize: 11.5, color: color.textSecondary, lineHeight: 1.7,
+        border: `1px dashed ${color.border}`, borderRadius: radius.control, padding: '10px 12px',
+      }}
+    >
+      <strong style={{ color: color.textBody }}>
+        Not shown, because {MECHANISM_PROFILE[auction.mechanism].label} cannot honour them:
+      </strong>{' '}
+      {gone.map((setting) => setting.label(auction)).join(' · ')}. They are absent rather than
+      disabled — a control a buyer can set and believe, which the auction then ignores, is worse
+      than one that was never offered.
     </div>
   );
 }
@@ -463,7 +633,7 @@ function BidderPreview({ policy, amberBandPct }: { policy: FeedbackPolicy; amber
           <div style={{ fontSize: 11, color: '#94A3B8', marginBottom: 6 }}>
             Every number is exposed — including yours, to everyone else.
           </div>
-          {['Bidder A  $148,350', 'Bidder C  $147,200', 'Bidder B  $148,900', 'You       $149,850'].map((line) => (
+          {['Bidder A  ₹1,48,350', 'Bidder C  ₹1,47,200', 'Bidder B  ₹1,48,900', 'You       ₹1,49,850'].map((line) => (
             <div key={line} style={mono}>{line}</div>
           ))}
         </div>
@@ -513,8 +683,10 @@ function BidderPreview({ policy, amberBandPct }: { policy: FeedbackPolicy; amber
 // ---------------------------------------------------------------------------
 
 function AuctionLobby({ eventId }: { eventId: string }) {
+  const { state: store } = useStore();
+  const held = auctionFor(store, eventId)!;
   const { state, dispatch } = useStore();
-  const auction = state.auction.auction;
+  const auction = held.auction;
   const bidders = biddersForEvent(state, eventId);
   const joined = bidders.filter(
     (b) => b.participationStatus === 'JOINED' || b.participationStatus === 'BIDDING',
@@ -524,29 +696,14 @@ function AuctionLobby({ eventId }: { eventId: string }) {
 
   const check = checkCanStart(auction, joined.length, bidders.length, false);
 
-  const rulesByMechanism: Record<string, string[]> = {
-    ENGLISH: [
-      `Bid whenever you like. Each bid must improve on the leading bid by at least ${auction.antiGaming.minDecrement}%.`,
-      'You cannot bid against your own leading bid.',
-      'A bid in the final two minutes extends the clock by two minutes.',
-    ],
-    JAPANESE: [
-      'The system moves the price one step each round.',
-      'Each round you confirm you will stay in, or you drop out.',
-      'Dropping out is final. The last bidder standing wins.',
-    ],
-    DUTCH: [
-      'The system moves the clock against you until someone accepts.',
-      'The first acceptance ends the auction immediately.',
-      'There is no second chance — accept when the price is one you will honour.',
-    ],
-    SEALED_BID: [
-      'Submit one price. You will not see any competitor information.',
-      'All bids are revealed together at the reveal time.',
-      'You cannot revise after submission.',
-    ],
-  };
-  const rules = rulesByMechanism[auction.mechanism] ?? rulesByMechanism.ENGLISH;
+  /**
+   * Exactly what the supplier is shown in their own lobby and console.
+   *
+   * Generated from this auction's configuration by `bidderRules`, not written
+   * out here — the controller confirming "what was communicated" has to be
+   * reading the same sentences the bidder is, or the check is theatre.
+   */
+  const rules = bidderRules(auction);
 
   return (
     <div className="rfx-split">
@@ -557,6 +714,8 @@ function AuctionLobby({ eventId }: { eventId: string }) {
         {check.warnings.map((warning) => (
           <ValidationBanner key={warning} tone="warning" title="Before you start">{warning}</ValidationBanner>
         ))}
+
+        <RehearsalCard eventId={eventId} />
 
         <Card title="Participants" hint="Registered, joined and dry-run status are separate facts.">
           <div className="rfx-stack" style={{ gap: 8 }}>
@@ -642,8 +801,21 @@ function AuctionLobby({ eventId }: { eventId: string }) {
         title="Open bidding"
         onClose={() => setStartOpen(false)}
         onConfirm={() => {
-          dispatch({ type: 'CONTROLLER_ACTION', action: 'RESUME', reason: justification || 'Auction opened by the controller.' });
-          dispatch({ type: 'OPEN_LOT', auctionLotId: 'al-1' });
+          /**
+           * One action, because opening the room and opening its first lot are
+           * one decision and have to leave one row in the log.
+           *
+           * This used to be three dispatches, the middle of which named the
+           * seeded auction's lot by hand — so it opened nothing at all for an
+           * auction published from a journey, and the controller was left with
+           * a live auction nobody could bid into.
+           */
+          dispatch({
+            type: 'CONTROLLER_ACTION',
+            eventId,
+            action: 'OPEN',
+            reason: justification || 'Auction opened by the controller.',
+          });
           dispatch({ type: 'UPDATE_EVENT', eventId, patch: { status: 'AUCTION_LIVE' } });
           setStartOpen(false);
         }}
@@ -669,39 +841,169 @@ function AuctionLobby({ eventId }: { eventId: string }) {
   );
 }
 
+/**
+ * The practice run, from the controller's side.
+ *
+ * Opening it lets every invited supplier try this auction's controls against
+ * this auction's rules before the room opens. The controller's interest in it
+ * is readiness, not content: a Japanese auction where nobody has pressed the
+ * confirm button is one round away from eliminating half its field by
+ * accident, and that is knowable here while it can still be fixed.
+ *
+ * What the controller is shown is counts. The figures a supplier typed while
+ * practising do not cross the seam at all — a rehearsal the buyer can read
+ * the prices of is not practice, it is disclosure with a friendly label.
+ */
+function RehearsalCard({ eventId }: { eventId: string }) {
+  const { state, dispatch } = useStore();
+  const held = auctionFor(state, eventId)!;
+  const auction = held.auction;
+  const bidders = biddersForEvent(state, eventId);
+  const open = rehearsalOpen(held.controlEvents);
+  const openedAt = rehearsalOpenedAt(held.controlEvents);
+
+  const activity = state.rehearsalActivity.filter((row) => row.auctionId === auction.id);
+  const tried = new Set(activity.map((row) => row.id));
+  const briefing = rehearsalBriefing(auction);
+
+  const act = (action: 'OPEN_REHEARSAL' | 'CLOSE_REHEARSAL', reason: string) =>
+    dispatch({ type: 'CONTROLLER_ACTION', eventId, action, reason });
+
+  return (
+    <Card
+      title="Practice run"
+      hint={open
+        ? `Open since ${new Date(openedAt ?? Date.now()).toLocaleTimeString()}. Suppliers can try the controls; nothing they enter is seen by you or kept.`
+        : 'Let suppliers try this auction’s controls, against this auction’s rules, before you open the room.'}
+      action={
+        <Button
+          variant={open ? 'secondary' : 'primary'}
+          size="small"
+          onClick={() => (open
+            ? act('CLOSE_REHEARSAL', 'Practice run closed by the controller.')
+            : act('OPEN_REHEARSAL', 'Practice run opened so bidders can learn the format.'))}
+        >
+          {open ? 'Close practice' : 'Open practice'}
+        </Button>
+      }
+    >
+      <div className="rfx-stack" style={{ gap: 12 }}>
+        <div style={{ fontSize: 12.5, color: color.textSecondary, lineHeight: 1.65 }}>
+          {briefing.headline}. Bidders are shown the rules of this auction and asked to try{' '}
+          {briefing.tryThis.length} things. Practice bids are validated by the real rules — the
+          real minimum improvement, the real bounds — and are discarded when you open bidding.
+        </div>
+
+        <div
+          style={{
+            display: 'flex', alignItems: 'baseline', gap: 18, flexWrap: 'wrap',
+            padding: '10px 12px', background: color.surfacePage, borderRadius: radius.control,
+          }}
+        >
+          <Stat
+            label="Have practised"
+            value={`${tried.size} / ${bidders.length}`}
+            tone={tried.size === bidders.length ? 'good' : tried.size === 0 ? 'warn' : 'plain'}
+            hint={tried.size === 0 ? 'Nobody has tried it yet' : undefined}
+          />
+          <Stat
+            label="Attempts"
+            value={String(activity.reduce((total, row) => total + row.attempts, 0))}
+            hint="Counts only — never the figures"
+          />
+        </div>
+
+        {bidders.map((bidder) => {
+          const row = activity.find((a) => a.id === bidder.id);
+          return (
+            <div
+              key={bidder.id}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 10, fontSize: 12.5,
+                border: `1px solid ${color.border}`, borderRadius: radius.control, padding: '8px 12px',
+              }}
+            >
+              <span style={{ flex: 1, minWidth: 0 }}>{COUNTERPARTY_NAMES[bidder.counterpartyId]}</span>
+              {row
+                ? (
+                  <>
+                    <Chip tone="brand">practised</Chip>
+                    <span style={{ fontSize: 11, color: color.textSecondary, fontVariantNumeric: 'tabular-nums' }}>
+                      {row.accepted} of {row.attempts} accepted
+                    </span>
+                  </>
+                )
+                : <Chip tone="neutral">not tried</Chip>}
+            </div>
+          );
+        })}
+      </div>
+    </Card>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Pack 18 — buyer live cockpit
 // ---------------------------------------------------------------------------
 
 function BuyerCockpit({ eventId }: { eventId: string }) {
+  const { state: store } = useStore();
+  const held = auctionFor(store, eventId)!;
   const { state, dispatch } = useStore();
   const event = state.events.find((e) => e.id === eventId)!;
-  const auction = state.auction.auction;
-  const [selectedLotId, setSelectedLotId] = React.useState(state.auction.lots[0]?.id ?? '');
+  const auction = held.auction;
+  const [selectedLotId, setSelectedLotId] = React.useState(held.lots[0]?.id ?? '');
   const [manifestOpen, setManifestOpen] = React.useState(false);
   const [pauseOpen, setPauseOpen] = React.useState(false);
   const [extendOpen, setExtendOpen] = React.useState(false);
   const [forceCloseOpen, setForceCloseOpen] = React.useState(false);
   const [abortOpen, setAbortOpen] = React.useState(false);
   const [pauseReason, setPauseReason] = React.useState('');
+  /**
+   * The mechanism action awaiting its reason.
+   *
+   * One modal rather than one per action: the controller is answering the same
+   * question every time — why — and the audit log wants the answer before the
+   * effect, whatever the effect is.
+   */
+  const [pendingAction, setPendingAction] = React.useState<ActionSpec | null>(null);
+  const [actionReason, setActionReason] = React.useState('');
+
+  /** Route an action to its confirmation, or straight through when it needs none. */
+  const act = (action: ActionSpec) => {
+    if (action.key === 'FORCE_CLOSE') { setForceCloseOpen(true); return; }
+    if (action.key === 'ABORT') { setAbortOpen(true); return; }
+    if (action.key === 'PAUSE') { setPauseOpen(true); return; }
+    if (action.key === 'EXTEND') { setExtendOpen(true); return; }
+    if (action.reasonRequired || action.typedConfirmation) {
+      setPendingAction(action);
+      setActionReason('');
+      return;
+    }
+    dispatch({
+      type: 'CONTROLLER_ACTION', eventId,
+      action: action.key as never,
+      reason: `${action.label} — no reason required for this action.`,
+    });
+  };
 
   // The buyer sees everything: real names, raw bids and transformed values.
-  const rows = buyerView(state.auction, selectedLotId, COUNTERPARTY_NAMES, {
+  const rows = buyerView(held, selectedLotId, COUNTERPARTY_NAMES, {
     observer: state.observerMode,
   });
   const bidding = rows.filter((r) => r.bidCount > 0);
   const leader = bidding[0];
-  const lot = state.auction.lots.find((l) => l.id === selectedLotId);
-  const lotDetail = lot ? state.auction.lotDetails[lot.lotId] : undefined;
+  const lot = held.lots.find((l) => l.id === selectedLotId);
+  const lotDetail = lot ? held.lotDetails[lot.lotId] : undefined;
   const paused = auction.status === 'PAUSED';
 
   const startingPrice = lot?.startingPrice ?? 0;
   const savings = leader ? startingPrice - leader.transformedValue : 0;
 
   const kpis: Kpi[] = [
-    { icon: '$', value: money(startingPrice, event.currency), label: 'Starting', iconBg: color.neutralSoft, iconFg: color.textSecondary, valueSize: 16 },
+    { icon: '₹', value: money(startingPrice, event.currency), label: 'Starting', iconBg: color.neutralSoft, iconFg: color.textSecondary, valueSize: 16 },
     {
-      icon: '$', value: leader ? money(leader.transformedValue, event.currency) : '—',
+      icon: '₹', value: leader ? money(leader.transformedValue, event.currency) : '—',
       label: 'Current best (transformed)', iconBg: color.brandPrimarySoft, iconFg: color.brandPrimary,
       valueColor: color.brandPrimary, valueSize: 19,
     },
@@ -715,87 +1017,12 @@ function BuyerCockpit({ eventId }: { eventId: string }) {
       label: 'Joined', iconBg: color.accentPurpleSoft, iconFg: color.accentPurpleText,
     },
     {
-      icon: '▤', value: String(state.auction.bids.filter((b) => b.auctionLotId === selectedLotId && b.isValid).length),
+      icon: '▤', value: String(held.bids.filter((b) => b.auctionLotId === selectedLotId && b.isValid).length),
       label: 'Valid bids', iconBg: color.infoSoft, iconFg: color.infoText,
     },
   ];
 
-  const rankColumns: Column<typeof rows[number]>[] = [
-    {
-      key: 'rank', header: '#', width: '48px',
-      render: (row) =>
-        row.bidCount === 0 ? (
-          <span style={{ color: color.textMuted }}>—</span>
-        ) : (
-          <span
-            style={{
-              display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-              width: 22, height: 22, borderRadius: '50%',
-              background: row.rank === 1 ? color.successSoft : color.neutralSoft,
-              color: row.rank === 1 ? color.successText : color.textSecondary,
-              fontSize: 11, fontWeight: 700,
-            }}
-          >
-            {row.rank}
-          </span>
-        ),
-    },
-    {
-      key: 'name', header: state.observerMode ? 'Bidder (masked)' : 'Bidder',
-      render: (row) => (
-        <div>
-          <div style={{ fontSize: 12.5, fontWeight: row.rank === 1 && row.bidCount > 0 ? 700 : 500 }}>
-            {row.displayName}
-          </div>
-          {!state.observerMode && (
-            <div style={{ fontSize: 10.5, color: color.textSecondary }}>{row.maskedLabel}</div>
-          )}
-        </div>
-      ),
-    },
-    {
-      key: 'bid', header: 'Bid as placed', numeric: true,
-      render: (row) => (row.bidCount === 0 ? <span style={{ color: color.textMuted }}>no bid</span> : money(row.bidValue, event.currency)),
-    },
-    {
-      key: 'transformed', header: 'Transformed', numeric: true,
-      render: (row) =>
-        row.bidCount === 0 ? (
-          <span style={{ color: color.textMuted }}>—</span>
-        ) : (
-          <strong>{money(row.transformedValue, event.currency)}</strong>
-        ),
-    },
-    {
-      key: 'movement', header: 'Last move', numeric: true,
-      render: (row) =>
-        row.movement === 0 ? (
-          <span style={{ color: color.textMuted }}>—</span>
-        ) : (
-          <span style={{ color: row.movement > 0 ? color.successText : color.dangerText }}>
-            {signedMoney(row.movement, event.currency)}
-          </span>
-        ),
-    },
-    { key: 'bids', header: 'Bids', numeric: true, render: (row) => row.bidCount || '—' },
-    {
-      key: 'last', header: 'Last bid at', width: '110px',
-      render: (row) =>
-        row.lastBidAt === null ? (
-          <span style={{ fontSize: 11, color: color.textMuted }}>—</span>
-        ) : (
-          <span style={{ fontSize: 11, fontVariantNumeric: 'tabular-nums' }}>
-            {new Date(row.lastBidAt).toLocaleTimeString()}
-          </span>
-        ),
-    },
-    {
-      key: 'status', header: 'Status',
-      render: (row) => <Pill presentation={PARTICIPATION_STATUS_PRESENTATION[row.participationStatus]} size="small" />,
-    },
-  ];
-
-  const bidHistory = [...state.auction.bids]
+  const bidHistory = [...held.bids]
     .filter((b) => b.auctionLotId === selectedLotId)
     .sort((a, b) => b.sequenceNumber - a.sequenceNumber);
 
@@ -809,7 +1036,7 @@ function BuyerCockpit({ eventId }: { eventId: string }) {
             <Button
               size="small"
               variant="primary"
-              onClick={() => dispatch({ type: 'CONTROLLER_ACTION', action: 'RESUME', reason: 'Controller resumed bidding.' })}
+              onClick={() => dispatch({ type: 'CONTROLLER_ACTION', eventId, action: 'RESUME', reason: 'Controller resumed bidding.' })}
             >
               Resume
             </Button>
@@ -820,10 +1047,10 @@ function BuyerCockpit({ eventId }: { eventId: string }) {
         </ValidationBanner>
       )}
 
-      {state.auction.integrityFlags.length > 0 && (
-        <ValidationBanner tone="error" title={`${state.auction.integrityFlags.length} integrity flag(s)`}>
+      {held.integrityFlags.length > 0 && (
+        <ValidationBanner tone="error" title={`${held.integrityFlags.length} integrity flag(s)`}>
           <ul style={{ margin: '4px 0 0', paddingLeft: 16, lineHeight: 1.6 }}>
-            {state.auction.integrityFlags.map((flag, i) => (
+            {held.integrityFlags.map((flag, i) => (
               <li key={i}>
                 <strong>{flag.kind.replace('_', ' ').toLowerCase()}</strong> — {flag.detail}
               </li>
@@ -853,7 +1080,9 @@ function BuyerCockpit({ eventId }: { eventId: string }) {
             {paused ? 'PAUSED' : 'AUCTION LIVE'}
           </span>
           <span style={{ fontSize: 12, color: '#94A3B8', minWidth: 0 }}>
-            {auction.mechanism} · {VISIBILITY_MANIFEST[auction.feedbackPolicy].label} feedback · {directionLabel(auction.side)}
+            {MECHANISM_PROFILE[auction.mechanism].label}
+            {' · '}{VISIBILITY_MANIFEST[auction.feedbackPolicy].label} feedback
+            {' · '}{directionLabel(auction.side)}
           </span>
           <span style={{ marginLeft: 'auto', flexShrink: 0 }}>
             <Countdown closesAt={lot?.closesAt ?? null} size={24} label="Time remaining" paused={paused} onDark />
@@ -865,17 +1094,9 @@ function BuyerCockpit({ eventId }: { eventId: string }) {
 
         <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap' }}>
           <Button variant="secondary" onClick={() => setManifestOpen(true)}>Visibility manifest</Button>
-          <Button variant="secondary" onClick={() => setExtendOpen(true)}>Extend</Button>
-          <Button
-            variant="secondary"
-            onClick={() => (paused
-              ? dispatch({ type: 'CONTROLLER_ACTION', action: 'RESUME', reason: 'Controller resumed bidding.' })
-              : setPauseOpen(true))}
-          >
-            {paused ? 'Resume' : 'Pause'}
-          </Button>
-          <Button variant="secondary" onClick={() => setForceCloseOpen(true)}>Force close</Button>
-          <Button variant="destructive" onClick={() => setAbortOpen(true)}>Abort</Button>
+          {/* What this controller may do is decided by the mechanism, not by a
+              fixed row of five buttons that means different things in each. */}
+          <MechanismControls held={held} eventId={eventId} onAct={act} />
         </div>
       </div>
 
@@ -885,9 +1106,9 @@ function BuyerCockpit({ eventId }: { eventId: string }) {
         <div className="rfx-stack" style={{ gap: 14 }}>
           <Card padded={false} title="Lots" hint="Per-lot states run in parallel.">
             <div style={{ display: 'flex', gap: 8, padding: 12, flexWrap: 'wrap' }}>
-              {state.auction.lots.map((auctionLot) => {
-                const detail = state.auction.lotDetails[auctionLot.lotId];
-                const lotRows = buyerView(state.auction, auctionLot.id, COUNTERPARTY_NAMES);
+              {held.lots.map((auctionLot) => {
+                const detail = held.lotDetails[auctionLot.lotId];
+                const lotRows = buyerView(held, auctionLot.id, COUNTERPARTY_NAMES);
                 const lotLeader = lotRows.find((r) => r.bidCount > 0);
                 return (
                   <button
@@ -923,10 +1144,21 @@ function BuyerCockpit({ eventId }: { eventId: string }) {
             </div>
           </Card>
 
+          <CockpitProgress eventId={eventId} auctionLotId={selectedLotId} />
+
+          {/* Everything that differs by mechanism: the Japanese round and its
+              ladder, the Dutch clock, the sealed envelopes, the turn order,
+              the composite. Absent for a plain English auction, which needs
+              none of it. */}
+          <MechanismState held={held} event={event} auctionLotId={selectedLotId} />
+
           <Card
             padded={false}
-            title="Live standing"
-            hint="Ranked on the transformed value. The buyer always sees both the raw bid and the transformed value."
+            title={rankingNotice(held) === null ? 'Live standing' : 'Bidders'}
+            hint={
+              rankingNotice(held)
+              ?? 'Ranked on the transformed value. The buyer always sees both the raw bid and the transformed value.'
+            }
             action={
               <Toggle
                 checked={state.observerMode}
@@ -936,10 +1168,13 @@ function BuyerCockpit({ eventId }: { eventId: string }) {
             }
           >
             <Table
-              columns={rankColumns}
+              columns={mechanismColumns(held, event, state.observerMode)}
               rows={rows}
               rowKey={(row) => row.bidderId}
-              rowStyle={(row) => (row.rank === 1 && row.bidCount > 0 ? { background: '#F0FDF4' } : undefined)}
+              rowStyle={(row) =>
+                rankingNotice(held) === null && row.rank === 1 && row.bidCount > 0
+                  ? { background: '#F0FDF4' }
+                  : undefined}
             />
           </Card>
 
@@ -1044,7 +1279,7 @@ function BuyerCockpit({ eventId }: { eventId: string }) {
             }
             evidence={[
               { label: 'Participation records', detail: `${bidding.length} of ${rows.length} have bid` },
-              { label: 'Bid ledger', detail: `${state.auction.bids.filter((b) => b.isValid).length} valid bids` },
+              { label: 'Bid ledger', detail: `${held.bids.filter((b) => b.isValid).length} valid bids` },
             ]}
             breaches={[forbiddenReason('CONTROL_AUCTION_UNCONFIRMED')]}
           />
@@ -1080,12 +1315,12 @@ function BuyerCockpit({ eventId }: { eventId: string }) {
                   key={row.policy}
                   style={{
                     borderTop: `1px solid ${color.border}`,
-                    background: row.policy === state.auction.auction.feedbackPolicy ? color.brandPrimarySoft : '#fff',
+                    background: row.policy === held.auction.feedbackPolicy ? color.brandPrimarySoft : '#fff',
                   }}
                 >
                   <td style={{ padding: '7px 9px', fontWeight: 600 }}>
                     {row.label}
-                    {row.policy === state.auction.auction.feedbackPolicy && (
+                    {row.policy === held.auction.feedbackPolicy && (
                       <Chip tone="brand">in force</Chip>
                     )}
                   </td>
@@ -1104,11 +1339,55 @@ function BuyerCockpit({ eventId }: { eventId: string }) {
       </Modal>
 
       <Modal
+        open={pendingAction !== null}
+        title={pendingAction?.label ?? ''}
+        onClose={() => setPendingAction(null)}
+        onConfirm={() => {
+          if (!pendingAction) return;
+          dispatch({
+            type: 'CONTROLLER_ACTION', eventId,
+            action: pendingAction.key as never,
+            reason: actionReason,
+          });
+          setPendingAction(null);
+          setActionReason('');
+        }}
+        confirmLabel={pendingAction?.label ?? 'Confirm'}
+        confirmDisabled={pendingAction?.reasonRequired === true && actionReason.trim().length < 4}
+      >
+        <p style={{ margin: '0 0 10px' }}>{pendingAction?.hint}</p>
+        {pendingAction?.key === 'ADVANCE_ROUND' && (
+          <ValidationBanner tone="warning" title="This eliminates anyone who has not confirmed">
+            Advancing closes the current window. Every bidder who has not confirmed is out of this
+            auction permanently and cannot rejoin. Their exit price is recorded on the ladder.
+          </ValidationBanner>
+        )}
+        {pendingAction?.key === 'OPEN_ENVELOPES' && (
+          <ValidationBanner tone="warning" title="There is no closing them again">
+            Every submission becomes readable at once, to you and to anyone with access to this
+            event. Your name and this moment are written to the log before the values appear.
+          </ValidationBanner>
+        )}
+        <div style={{ marginTop: 10 }}>
+          <Field label="Reason" required={pendingAction?.reasonRequired}>
+            <input
+              value={actionReason}
+              onChange={(e) => setActionReason(e.target.value)}
+              style={{
+                width: '100%', border: `1px solid ${color.border}`, borderRadius: radius.control,
+                padding: '7px 10px', fontSize: 13,
+              }}
+            />
+          </Field>
+        </div>
+      </Modal>
+
+      <Modal
         open={pauseOpen}
         title="Pause the auction"
         onClose={() => setPauseOpen(false)}
         onConfirm={() => {
-          dispatch({ type: 'CONTROLLER_ACTION', action: 'PAUSE', reason: pauseReason || 'Controller paused the auction.' });
+          dispatch({ type: 'CONTROLLER_ACTION', eventId, action: 'PAUSE', reason: pauseReason || 'Controller paused the auction.' });
           setPauseOpen(false);
           setPauseReason('');
         }}
@@ -1137,7 +1416,7 @@ function BuyerCockpit({ eventId }: { eventId: string }) {
         onClose={() => setExtendOpen(false)}
         onConfirm={() => {
           dispatch({
-            type: 'CONTROLLER_ACTION', action: 'EXTEND',
+            type: 'CONTROLLER_ACTION', eventId, action: 'EXTEND',
             reason: 'Controller extended the clock manually.',
             extendSec: auction.antiGaming.softCloseExtensionSec,
           });
@@ -1158,7 +1437,7 @@ function BuyerCockpit({ eventId }: { eventId: string }) {
         confirmLabel="Force close"
         onClose={() => setForceCloseOpen(false)}
         onConfirm={(reason) => {
-          dispatch({ type: 'CONTROLLER_ACTION', action: 'FORCE_CLOSE', reason });
+          dispatch({ type: 'CONTROLLER_ACTION', eventId, action: 'FORCE_CLOSE', reason });
           setForceCloseOpen(false);
         }}
         description={
@@ -1177,7 +1456,7 @@ function BuyerCockpit({ eventId }: { eventId: string }) {
         confirmLabel="Abort auction"
         onClose={() => setAbortOpen(false)}
         onConfirm={(reason) => {
-          dispatch({ type: 'CONTROLLER_ACTION', action: 'ABORT', reason });
+          dispatch({ type: 'CONTROLLER_ACTION', eventId, action: 'ABORT', reason });
           setAbortOpen(false);
         }}
         description={
@@ -1188,6 +1467,182 @@ function BuyerCockpit({ eventId }: { eventId: string }) {
         }
       />
     </div>
+  );
+}
+
+/**
+ * The room over time, and the lever for when it stops moving.
+ *
+ * A ranking table answers "where do we stand". It cannot answer "is this
+ * working", and that is the question a controller is actually sitting there
+ * asking. A flat line for eleven minutes is the signal to do something — and
+ * the most useful something is usually to change what bidders can see, which
+ * is why that control lives here rather than back in the setup screen they
+ * can no longer reach.
+ */
+function CockpitProgress({ eventId, auctionLotId }: { eventId: string; auctionLotId: string }) {
+  const { state, dispatch } = useStore();
+  const held = auctionFor(state, eventId)!;
+  const event = state.events.find((e) => e.id === eventId)!;
+  const auction = held.auction;
+  const lot = held.lots.find((l) => l.id === auctionLotId);
+
+  // Re-read on a timer so the pulse and the window are current without a bid
+  // having to land to force a render.
+  const [now, setNow] = React.useState(() => serverNow());
+  React.useEffect(() => {
+    const timer = setInterval(() => setNow(serverNow()), 5_000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const [policyOpen, setPolicyOpen] = React.useState(false);
+  const [nextPolicy, setNextPolicy] = React.useState<FeedbackPolicy>(auction.feedbackPolicy);
+  const [policyReason, setPolicyReason] = React.useState('');
+
+  const series = progressFor(
+    auction, auctionLotId, held.bids, held.controlEvents, lot?.startingPrice ?? 0, now,
+  );
+  const feed = activityFeed({
+    auction,
+    bids: held.bids,
+    controlEvents: held.controlEvents,
+    auctionLotId,
+    nameOf: (bidderId) => {
+      const bidder = held.bidders.find((b) => b.id === bidderId);
+      return bidder ? COUNTERPARTY_NAMES[bidder.counterpartyId] : bidderId;
+    },
+    audience: 'CONTROLLER',
+  });
+
+  const from = series.firstBidAt ?? auction.startsAt ?? now - 60_000;
+  const to = Math.max(now, series.lastBidAt ?? now);
+  const quietMs = series.lastBidAt === null ? null : now - series.lastBidAt;
+  const quietMin = quietMs === null ? null : Math.floor(quietMs / 60_000);
+
+  /** Policies this mechanism can actually honour. */
+  const available = (Object.keys(VISIBILITY_MANIFEST) as FeedbackPolicy[]).filter(
+    (policy) => !MECHANISM_PROFILE[auction.mechanism].incompatibleFeedback.includes(policy),
+  );
+
+  return (
+    <Card
+      title="How it is going"
+      hint={`${MECHANISM_PROFILE[auction.mechanism].label} · ${VISIBILITY_MANIFEST[auction.feedbackPolicy].label} feedback`}
+      action={
+        available.length > 1 && (
+          <Button
+            variant="secondary"
+            size="small"
+            onClick={() => { setNextPolicy(auction.feedbackPolicy); setPolicyReason(''); setPolicyOpen(true); }}
+          >
+            Change what bidders see
+          </Button>
+        )
+      }
+    >
+      <div className="rfx-stack" style={{ gap: 14 }}>
+        <div style={{ display: 'flex', gap: 22, flexWrap: 'wrap' }}>
+          <Stat
+            label="Movement"
+            value={pct(series.improvementPct)}
+            tone={series.improvementPct > 0 ? 'good' : 'plain'}
+            hint={`from ${money(series.startingPrice, event.currency, { compact: true })}`}
+          />
+          <Stat label="Bidders in" value={String(series.fieldSize)} hint="have placed a valid bid" />
+          <Stat
+            label="Pulse"
+            value={`${series.recentRate}/min`}
+            tone={series.recentRate === 0 ? 'warn' : 'plain'}
+            hint="last five minutes"
+          />
+          <Stat
+            label="Quiet for"
+            value={quietMin === null ? '—' : `${quietMin}m`}
+            tone={quietMin !== null && quietMin >= 3 ? 'warn' : 'plain'}
+            hint={quietMin !== null && quietMin >= 3 ? 'consider more feedback' : 'since the last bid'}
+          />
+        </div>
+
+        <PriceChart
+          side={auction.side}
+          startingPrice={series.startingPrice}
+          from={from}
+          to={to}
+          format={(value) => money(value, event.currency, { compact: true })}
+          markers={series.markers.map((marker) => ({ at: marker.at, label: marker.label }))}
+          lines={[
+            {
+              label: 'Leading bid',
+              stroke: color.brandPrimary,
+              points: series.points.map((point) => ({ at: point.at, value: point.leadValue })),
+              dots: false,
+            },
+            {
+              label: 'Every bid',
+              stroke: color.accentPurple,
+              dashed: true,
+              points: series.points.map((point) => ({ at: point.at, value: point.value })),
+            },
+          ]}
+          emptyNote="No bids yet. The line starts at the opening price and moves as the room does."
+        />
+
+        <div>
+          <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 4 }}>Activity</div>
+          <ActivityFeed rows={feed} emptyNote="Nothing yet. Every bid and every control action lands here." />
+        </div>
+      </div>
+
+      <Modal
+        open={policyOpen}
+        title="Change what bidders can see"
+        width={620}
+        onClose={() => setPolicyOpen(false)}
+        confirmLabel="Change it"
+        onConfirm={() => {
+          dispatch({
+            type: 'CONTROLLER_ACTION', eventId, action: 'CHANGE_FEEDBACK',
+            feedbackPolicy: nextPolicy,
+            reason: policyReason || 'Feedback policy changed by the controller.',
+          });
+          setPolicyOpen(false);
+        }}
+      >
+        <p style={{ margin: '0 0 12px', lineHeight: 1.65 }}>
+          This changes the rules of a competition that is already running. Every console is told,
+          and the change is written to the log with your name against it. Nothing already sent is
+          recalled — a bidder who has seen the leading price has seen it.
+        </p>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(min(200px, 100%), 1fr))', gap: 8 }}>
+          {available.map((policy) => (
+            <Radio
+              key={policy}
+              checked={nextPolicy === policy}
+              onChange={() => setNextPolicy(policy)}
+              label={VISIBILITY_MANIFEST[policy].label}
+              hint={policy === auction.feedbackPolicy ? 'In force now' : undefined}
+            />
+          ))}
+        </div>
+        <div style={{ marginTop: 14, padding: '12px 14px', background: '#0F172A', borderRadius: radius.control, color: '#E2E8F0' }}>
+          <div style={{ fontSize: 10.5, textTransform: 'uppercase', letterSpacing: '.05em', color: '#94A3B8', marginBottom: 8 }}>
+            What a bidder will see afterwards
+          </div>
+          <BidderPreview policy={nextPolicy} amberBandPct={auction.trafficAmberBandPct} />
+        </div>
+        <div style={{ marginTop: 12 }}>
+          <Field label="Reason — written to the log before it takes effect" required>
+            <CurrencyInput
+              currency="›"
+              value={policyReason}
+              onChange={(e) => setPolicyReason(e.target.value)}
+              placeholder="The room has been quiet for six minutes under rank-only."
+              style={{ textAlign: 'left', fontFamily: 'inherit' }}
+            />
+          </Field>
+        </div>
+      </Modal>
+    </Card>
   );
 }
 
@@ -1239,7 +1694,7 @@ function BidOnBehalf({ eventId, auctionLotId }: { eventId: string; auctionLotId:
         disabled={!value || reason.trim().length < 4}
         onClick={() =>
           dispatch({
-            type: 'SUBMIT_BID',
+            type: 'SUBMIT_BID', eventId,
             auctionLotId, bidderId, bidValue: Number(value),
             userId: state.currentUser.id, source: 'ON_BEHALF',
             onBehalfReason: reason, confirmed: true,
@@ -1262,26 +1717,28 @@ function BidOnBehalf({ eventId, auctionLotId }: { eventId: string; auctionLotId:
 // ---------------------------------------------------------------------------
 
 function AuctionResults({ eventId }: { eventId: string }) {
+  const { state: store } = useStore();
+  const held = auctionFor(store, eventId)!;
   const { state, dispatch } = useStore();
   const event = state.events.find((e) => e.id === eventId)!;
-  const [lotId, setLotId] = React.useState(state.auction.lots[0]?.id ?? '');
+  const [lotId, setLotId] = React.useState(held.lots[0]?.id ?? '');
 
-  const rows = buyerView(state.auction, lotId, COUNTERPARTY_NAMES).filter((r) => r.bidCount > 0);
-  const lot = state.auction.lots.find((l) => l.id === lotId);
+  const rows = buyerView(held, lotId, COUNTERPARTY_NAMES).filter((r) => r.bidCount > 0);
+  const lot = held.lots.find((l) => l.id === lotId);
   const winner = rows[0];
   const startingPrice = lot?.startingPrice ?? 0;
   const savings = winner ? startingPrice - winner.transformedValue : 0;
-  const lotDetail = lot ? state.auction.lotDetails[lot.lotId] : undefined;
+  const lotDetail = lot ? held.lotDetails[lot.lotId] : undefined;
   const insideReserve =
     winner && lotDetail?.reservePrice != null ? winner.transformedValue <= lotDetail.reservePrice : true;
 
-  const bidCount = state.auction.bids.filter((b) => b.auctionLotId === lotId && b.isValid).length;
+  const bidCount = held.bids.filter((b) => b.auctionLotId === lotId && b.isValid).length;
   const durationMs = lot?.closesAt && lot?.opensAt ? lot.closesAt - lot.opensAt : 0;
 
   const kpis: Kpi[] = [
     { icon: '🏆', value: winner ? winner.displayName.split(' ')[0] : '—', label: 'Winner', iconBg: color.warningSoft, iconFg: color.warningText, valueSize: 15 },
-    { icon: '$', value: winner ? money(winner.bidValue, event.currency) : '—', label: 'Winning bid', iconBg: color.brandPrimarySoft, iconFg: color.brandPrimary, valueColor: color.brandPrimary },
-    { icon: '$', value: winner ? money(winner.transformedValue, event.currency) : '—', label: 'Transformed value', iconBg: color.infoSoft, iconFg: color.infoText },
+    { icon: '₹', value: winner ? money(winner.bidValue, event.currency) : '—', label: 'Winning bid', iconBg: color.brandPrimarySoft, iconFg: color.brandPrimary, valueColor: color.brandPrimary },
+    { icon: '₹', value: winner ? money(winner.transformedValue, event.currency) : '—', label: 'Transformed value', iconBg: color.infoSoft, iconFg: color.infoText },
     {
       icon: '↓', value: signedMoney(savings, event.currency), label: 'Movement from start',
       iconBg: savings >= 0 ? color.successSoft : color.dangerSoft, iconFg: savingsColor(savings),
@@ -1291,7 +1748,7 @@ function AuctionResults({ eventId }: { eventId: string }) {
     {
       icon: '◷',
       value: durationMs ? `${Math.round(durationMs / 60_000)} min` : '—',
-      label: `Duration${state.auction.auction.extensionsUsed ? ` +${state.auction.auction.extensionsUsed} ext` : ''}`,
+      label: `Duration${held.auction.extensionsUsed ? ` +${held.auction.extensionsUsed} ext` : ''}`,
       iconBg: color.warningSoft, iconFg: color.warningText, valueSize: 14,
     },
   ];
@@ -1353,8 +1810,8 @@ function AuctionResults({ eventId }: { eventId: string }) {
           )}
 
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            {state.auction.lots.map((auctionLot) => {
-              const detail = state.auction.lotDetails[auctionLot.lotId];
+            {held.lots.map((auctionLot) => {
+              const detail = held.lotDetails[auctionLot.lotId];
               return (
                 <Button
                   key={auctionLot.id}
@@ -1399,9 +1856,11 @@ function AuctionResults({ eventId }: { eventId: string }) {
 }
 
 function PriceLadder({ eventId, lotId, startingPrice }: { eventId: string; lotId: string; startingPrice: number }) {
+  const { state: store } = useStore();
+  const held = auctionFor(store, eventId)!;
   const { state } = useStore();
   const event = state.events.find((e) => e.id === eventId)!;
-  const bids = state.auction.bids
+  const bids = held.bids
     .filter((b) => b.auctionLotId === lotId && b.isValid)
     .sort((a, b) => a.sequenceNumber - b.sequenceNumber);
 
