@@ -286,10 +286,11 @@ describe('the three asks are three separate pieces of work', () => {
  */
 function libraryQuestionnaires(points: VendorInputPoint[], category: string) {
   return seedQuestionnaires({
-    existing: [], points, category, idSeed: 'loop',
+    existing: [], points, categories: [category], idSeed: 'loop',
     library: [...TENANT_TEMPLATES, ...CATEGORY_TEMPLATES],
   }).map((draft) => ({
     point: draft.point,
+    category: draft.category,
     name: draft.templateName,
     questions: draft.questions.map(({ id: _id, templateId: _templateId, ...rest }) => rest),
   }));

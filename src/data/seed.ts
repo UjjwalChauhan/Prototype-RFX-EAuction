@@ -9,7 +9,7 @@
 import type {
   Auction, AuctionControlEvent, AuctionLot, Bid, Clarification, ConfigSetting, CostComponent, Counterparty,
   DoARule, EventBidder, Id, LineItem, Lot, NegotiationRound, Question, Questionnaire,
-  Response, Score, Side, SourcingEvent, User, VendorInputPoint,
+  Response, Score, Side, SourcingEvent, Stage, User, VendorInputPoint,
 } from '../domain/types';
 import { DEFAULT_ANTI_GAMING } from '../domain/auctionEngine';
 import { defaultParameters } from '../domain/auctionRules';
@@ -18,10 +18,11 @@ import {
   JOURNEY_CUSTOM_KEY, JOURNEY_ENABLED_KEY, type CustomJourney,
 } from '../domain/journeyComposer';
 import {
-  TEMPLATE_CUSTOM_KEY, TEMPLATE_WEIGHTING_KEY, seedQuestionnaires,
+  TEMPLATE_CUSTOM_KEY, TEMPLATE_WEIGHTING_KEY, basketCategories, seedQuestionnaires,
 } from '../domain/questionnaireTemplates';
+import { questionnaireIdFor } from '../domain/stageEvents';
 import {
-  CATEGORY_TEMPLATES, DEFAULT_STAGE_WEIGHTING, TENANT_TEMPLATES,
+  CATEGORY_TEMPLATES, DEFAULT_STAGE_WEIGHTING, LOGISTICS_TEMPLATES, TENANT_TEMPLATES,
 } from './questionnaireTemplates';
 
 const MINUTE = 60_000;
@@ -400,6 +401,7 @@ export const LINE_ITEMS: LineItem[] = [
     deliveryLocation: 'Dubai DC', deliveryDate: null, incoterm: 'DDP', taxClass: 'STANDARD',
     baselinePrice: 8.67, baselineSource: 'LPP', currency: 'INR',
     isOptional: false, allowAlternate: false, sourcePrLineId: 'pr-0125-01',
+    category: 'Indirect', superCategory: 'Office & Administrative',
   },
   {
     id: 'li-2', lotId: 'lot-1', lineNumber: 2, itemCode: 'PPR-A3-80',
@@ -408,6 +410,7 @@ export const LINE_ITEMS: LineItem[] = [
     deliveryLocation: 'Dubai DC', deliveryDate: null, incoterm: 'DDP', taxClass: 'STANDARD',
     baselinePrice: 17.20, baselineSource: 'LPP', currency: 'INR',
     isOptional: false, allowAlternate: false, sourcePrLineId: 'pr-0125-02',
+    category: 'Indirect', superCategory: 'Office & Administrative',
   },
   {
     id: 'li-3', lotId: 'lot-2', lineNumber: 3, itemCode: 'PEN-BLU-BX',
@@ -416,6 +419,7 @@ export const LINE_ITEMS: LineItem[] = [
     deliveryLocation: 'Dubai DC', deliveryDate: null, incoterm: 'DDP', taxClass: 'STANDARD',
     baselinePrice: 18.50, baselineSource: 'PR', currency: 'INR',
     isOptional: false, allowAlternate: true, sourcePrLineId: 'pr-0125-03',
+    category: 'Indirect', superCategory: 'Office & Administrative',
   },
   {
     id: 'li-4', lotId: 'lot-2', lineNumber: 4, itemCode: 'MKR-ASST',
@@ -424,6 +428,7 @@ export const LINE_ITEMS: LineItem[] = [
     deliveryLocation: 'Abu Dhabi DC', deliveryDate: null, incoterm: 'DDP', taxClass: 'STANDARD',
     baselinePrice: 9.10, baselineSource: 'PR', currency: 'INR',
     isOptional: false, allowAlternate: true, sourcePrLineId: 'pr-0125-04',
+    category: 'Indirect', superCategory: 'Office & Administrative',
   },
   {
     id: 'li-5', lotId: 'lot-3', lineNumber: 5, itemCode: 'FLD-LEV-A4',
@@ -432,6 +437,7 @@ export const LINE_ITEMS: LineItem[] = [
     deliveryLocation: 'Dubai DC', deliveryDate: null, incoterm: 'DDP', taxClass: 'STANDARD',
     baselinePrice: 3.90, baselineSource: 'SHOULD_COST', currency: 'INR',
     isOptional: false, allowAlternate: false, sourcePrLineId: 'pr-0125-05',
+    category: 'Indirect', superCategory: 'Office & Administrative',
   },
   {
     id: 'li-6', lotId: 'lot-3', lineNumber: 6, itemCode: 'BOX-ARC',
@@ -440,6 +446,7 @@ export const LINE_ITEMS: LineItem[] = [
     deliveryLocation: 'Sharjah Store', deliveryDate: null, incoterm: 'DDP', taxClass: 'STANDARD',
     baselinePrice: 4.30, baselineSource: 'SHOULD_COST', currency: 'INR',
     isOptional: true, allowAlternate: false, sourcePrLineId: 'pr-0125-06',
+    category: 'Indirect', superCategory: 'Office & Administrative',
   },
 ];
 
@@ -475,6 +482,12 @@ interface Basket {
     awardMode: Lot['awardMode'];
     status: Lot['status'];
     lines: BasketLine[];
+    /**
+     * The spend category this lot buys in. Omitted where it is the event's
+     * own — only a lot that leaves the event's category has to say so, and a
+     * consolidated event is exactly the one that does.
+     */
+    category?: string;
     /**
      * The buyer's internal target. Seeded only where a mechanism needs one —
      * a traffic light with no target has no colours to show, because the
@@ -669,8 +682,11 @@ const BASKETS: Basket[] = [
         ],
       },
       {
+        // The lot that makes this a consolidated event: pallets come from the
+        // logistics market, not the office-supplies one, so this lot carries
+        // its own category — and therefore its own questionnaire.
         name: 'Lot 2 \u00b7 Handling', description: 'Pallets and strapping.',
-        awardMode: 'SPLIT', status: 'LOT_OPEN',
+        awardMode: 'SPLIT', status: 'LOT_OPEN', category: 'Logistics',
         lines: [
           { itemCode: 'HND-PLT-EUR', description: 'Pallet, Euro, heat treated', specification: 'ISPM 15 stamped, 4-way entry', quantity: 3_200, uom: 'each', baselinePrice: 412, baselineSource: 'PO' },
         ],
@@ -720,6 +736,10 @@ export const OTHER_EVENT_LOTS: Lot[] = BASKETS.flatMap((basket) =>
   })),
 );
 
+/** The category an event buys in, for a lot that does not name its own. */
+const categoryOfEvent = (eventId: string): string =>
+  EVENTS.find((event) => event.id === eventId)?.category ?? 'Indirect';
+
 /** Line items of every seeded event other than the primary one. */
 export const OTHER_EVENT_LINE_ITEMS: LineItem[] = BASKETS.flatMap((basket) => {
   let lineNumber = 0;
@@ -744,6 +764,8 @@ export const OTHER_EVENT_LINE_ITEMS: LineItem[] = BASKETS.flatMap((basket) => {
         currency: basket.currency,
         isOptional: false,
         allowAlternate: false,
+        category: lot.category ?? categoryOfEvent(basket.eventId),
+        superCategory: null,
         sourcePrLineId: null,
       };
     }),
@@ -761,7 +783,7 @@ export const EVENT_BIDDERS: EventBidder[] = [
     ndaAcceptedAt: SEED_NOW - 11 * DAY,
     participationStatus: 'BIDDING', qualificationStatus: 'QUALIFIED', awardStatus: 'NONE',
     qualificationSnapshot: 92, performanceRatingSnapshot: 88,
-    bidOnBehalfAllowed: true, maskedLabel: 'Bidder A',
+    bidOnBehalfAllowed: true, categories: [], maskedLabel: 'Bidder A',
     disqualified: false, disqualificationReason: null,
   },
   {
@@ -770,7 +792,7 @@ export const EVENT_BIDDERS: EventBidder[] = [
     ndaAcceptedAt: SEED_NOW - 10 * DAY,
     participationStatus: 'IDLE', qualificationStatus: 'QUALIFIED', awardStatus: 'NONE',
     qualificationSnapshot: 85, performanceRatingSnapshot: 74,
-    bidOnBehalfAllowed: false, maskedLabel: 'Bidder B',
+    bidOnBehalfAllowed: false, categories: [], maskedLabel: 'Bidder B',
     disqualified: false, disqualificationReason: null,
   },
   {
@@ -779,7 +801,7 @@ export const EVENT_BIDDERS: EventBidder[] = [
     ndaAcceptedAt: SEED_NOW - 11 * DAY,
     participationStatus: 'BIDDING', qualificationStatus: 'QUALIFIED', awardStatus: 'NONE',
     qualificationSnapshot: 78, performanceRatingSnapshot: 81,
-    bidOnBehalfAllowed: false, maskedLabel: 'Bidder C',
+    bidOnBehalfAllowed: false, categories: [], maskedLabel: 'Bidder C',
     disqualified: false, disqualificationReason: null,
   },
   {
@@ -789,7 +811,7 @@ export const EVENT_BIDDERS: EventBidder[] = [
     // Accepted the invitation but has not joined the live room. Two axes.
     participationStatus: 'REGISTERED', qualificationStatus: 'QUALIFIED', awardStatus: 'NONE',
     qualificationSnapshot: 64, performanceRatingSnapshot: 0,
-    bidOnBehalfAllowed: false, maskedLabel: 'Bidder D',
+    bidOnBehalfAllowed: false, categories: [], maskedLabel: 'Bidder D',
     disqualified: false, disqualificationReason: null,
   },
 ];
@@ -821,6 +843,9 @@ const invite = (
   performanceRatingSnapshot:
     COUNTERPARTIES.find((c) => c.id === counterpartyId)?.performanceRating ?? 0,
   bidOnBehalfAllowed: false,
+  // An empty list means the whole basket. Only a supplier shortlisted for part
+  // of a consolidated event names the categories they were asked for.
+  categories: [],
   maskedLabel: `Bidder ${String.fromCharCode(65 + i)}`,
   disqualified: false,
   disqualificationReason: null,
@@ -839,9 +864,9 @@ export const REQUEST_BIDDERS: EventBidder[] = [
   invite('evt-rfp-018', 'cp-global', 2, 5),
 
   // Warehouse consumables — office and administrative suppliers.
-  invite('evt-rfq-061', 'cp-abc', 0, 3),
-  invite('evt-rfq-061', 'cp-prime', 1, 3),
-  invite('evt-rfq-061', 'cp-brightpath', 2, 3),
+  invite('evt-rfq-061', 'cp-abc', 0, 3, { categories: ['Indirect', 'Logistics'] }),
+  invite('evt-rfq-061', 'cp-prime', 1, 3, { categories: ['Indirect'] }),
+  invite('evt-rfq-061', 'cp-brightpath', 2, 3, { categories: ['Logistics'] }),
 ];
 
 /**
@@ -855,31 +880,42 @@ export const REQUEST_BIDDERS: EventBidder[] = [
  * supplier who opened an ask was shown a form with no questions in it and
  * could "submit" nothing at all.
  */
-const REQUEST_ASKS: { eventId: Id; point: VendorInputPoint; category: string }[] = [
-  { eventId: 'evt-rfi-005', point: 'RFI', category: 'Facilities' },
-  { eventId: 'evt-rfp-018', point: 'RFP', category: 'IT' },
-  { eventId: 'evt-rfq-061', point: 'RFQ', category: 'Indirect' },
+const REQUEST_ASKS: { eventId: Id; point: VendorInputPoint }[] = [
+  { eventId: 'evt-rfi-005', point: 'RFI' },
+  { eventId: 'evt-rfp-018', point: 'RFP' },
+  { eventId: 'evt-rfq-061', point: 'RFQ' },
 ];
 
 export function REQUEST_QUESTIONNAIRES(): Questionnaire[] {
-  const library = [...TENANT_TEMPLATES, ...CATEGORY_TEMPLATES];
-  return REQUEST_ASKS.map(({ eventId, point, category }) => {
-    const [draft] = seedQuestionnaires({
-      existing: [], points: [point], library, category, idSeed: eventId,
+  const library = [...TENANT_TEMPLATES, ...CATEGORY_TEMPLATES, ...LOGISTICS_TEMPLATES];
+  return REQUEST_ASKS.flatMap(({ eventId, point }) => {
+    // The categories come off the basket, not off the event header: the
+    // Warehouse Consumables RFQ buys cartons in Indirect and pallets in
+    // Logistics, and it is the lines that know that.
+    const categories = basketCategories(
+      OTHER_EVENT_LINE_ITEMS.filter((line) => line.id.startsWith(`${eventId}-li-`)),
+      categoryOfEvent(eventId),
+    );
+    const drafts = seedQuestionnaires({
+      existing: [], points: [point], library, categories, idSeed: eventId,
     });
-    const questionnaireId = `${eventId}-qn-${point.toLowerCase()}`;
-    return {
-      id: questionnaireId,
-      eventId,
-      stage: point,
-      name: draft.templateName,
-      questions: draft.questions.map((question, i): Question => {
-        // A template question carries the template it came from; an event
-        // question carries the questionnaire. Everything else is the same.
-        const { templateId: _templateId, ...rest } = question;
-        return { ...rest, id: `${questionnaireId}-q${i + 1}`, questionnaireId };
-      }),
-    };
+    return drafts.map((draft): Questionnaire => {
+      const questionnaireId = questionnaireIdFor(eventId, point as Stage, draft.category);
+      return {
+        id: questionnaireId,
+        eventId,
+        stage: point,
+        category: draft.category,
+        name: draft.templateName,
+        sourceTemplateId: draft.templateId,
+        questions: draft.questions.map((question, i): Question => {
+          // A template question carries the template it came from; an event
+          // question carries the questionnaire. Everything else is the same.
+          const { templateId: _templateId, ...rest } = question;
+          return { ...rest, id: `${questionnaireId}-q${i + 1}`, questionnaireId };
+        }),
+      };
+    });
   });
 }
 
@@ -1326,6 +1362,13 @@ CONFIG_SETTINGS.push(
     value: CATEGORY_TEMPLATES, isLocked: false, setBy: 'user-ar', setAt: SEED_NOW - 40 * DAY,
   },
   {
+    // Logistics keeps its own library. An event that buys in both categories
+    // reaches this one through its Logistics lines and the Indirect one
+    // through the rest, which is what produces two questionnaires at one ask.
+    key: TEMPLATE_CUSTOM_KEY, scopeType: 'CATEGORY', scopeId: 'Logistics',
+    value: LOGISTICS_TEMPLATES, isLocked: false, setBy: 'user-ar', setAt: SEED_NOW - 30 * DAY,
+  },
+  {
     key: TEMPLATE_WEIGHTING_KEY, scopeType: 'TENANT', scopeId: 'tenant-udaan',
     value: DEFAULT_STAGE_WEIGHTING, isLocked: false, setBy: 'user-ar', setAt: SEED_NOW - 180 * DAY,
   },
@@ -1398,6 +1441,7 @@ const auctionBidder = (
     id: `${eventId}-eb-${counterpartyId}`,
     eventId,
     counterpartyId,
+    categories: [],
     isProvisional: false,
     invitedAt: SEED_NOW - 6 * DAY,
     invitationStatus: 'ACCEPTED',

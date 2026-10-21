@@ -25,10 +25,58 @@ export function QuestionnaireTab({ eventId }: { eventId: string }) {
   const event = state.events.find((e) => e.id === eventId)!;
   // A price schedule is bound to this event's lines, not to a fixed list.
   const lineCount = lineItemsForEvent(state, eventId).length;
-  const [questions, setQuestions] = React.useState<Question[]>(QUESTIONNAIRE.questions);
-  const [selectedId, setSelectedId] = React.useState<string>(questions[0]?.id ?? '');
 
-  const selected = questions.find((q) => q.id === selectedId);
+  /**
+   * What this ask actually asks.
+   *
+   * One questionnaire per category in the basket: an event buying cartons and
+   * pallets asks each market its own questions, so the buyer gets a tab per
+   * category rather than one merged list in which neither set makes sense. The
+   * seeded demonstration set stands in for an event that predates event-owned
+   * questionnaires — the same fallback the Responses tab uses, so the two
+   * screens never disagree about what was asked.
+   */
+  const asked = React.useMemo(() => {
+    const family = new Set([
+      eventId, ...state.events.filter((e) => e.parentEventId === eventId).map((e) => e.id),
+    ]);
+    const own = state.questionnaires.filter((q) => family.has(q.eventId));
+    return own.length > 0
+      ? own
+      : [{ ...QUESTIONNAIRE, eventId, category: null } as typeof QUESTIONNAIRE & { category: string | null }];
+  }, [state.questionnaires, state.events, eventId]);
+
+  const [activeId, setActiveId] = React.useState<string>('');
+  const current = asked.find((q) => q.id === activeId) ?? asked[0];
+
+  const [edits, setEdits] = React.useState<Record<string, Question[]>>({});
+  const questions = edits[current.id] ?? current.questions;
+  const [selectedId, setSelectedId] = React.useState<string>('');
+  const setQuestions = (next: (qs: Question[]) => Question[]) =>
+    setEdits((all) => ({ ...all, [current.id]: next(all[current.id] ?? current.questions) }));
+
+  const selected = questions.find((q) => q.id === selectedId) ?? questions[0];
+
+  /**
+   * Sections, read off the questions themselves.
+   *
+   * The questionnaire carries its questions and the section each belongs to,
+   * not a section list, so the grouping is derived. The seeded names are used
+   * where they match and the section is otherwise left unnamed — better an
+   * honest "Questions" heading than a borrowed one that describes a different
+   * event's structure.
+   */
+  const sections = React.useMemo(() => {
+    const order: (string | null)[] = [];
+    for (const question of questions) {
+      if (!order.includes(question.sectionId)) order.push(question.sectionId);
+    }
+    return order.map((sectionId) => ({
+      id: sectionId,
+      name: QUESTION_SECTIONS.find((s) => s.id === sectionId)?.name ?? 'Questions',
+      questions: questions.filter((q) => q.sectionId === sectionId),
+    }));
+  }, [questions]);
   const technicalWeight = questions
     .filter((q) => q.envelope === 'TECHNICAL' && q.weight > 0)
     .reduce((a, q) => a + q.weight, 0);
@@ -56,11 +104,31 @@ export function QuestionnaireTab({ eventId }: { eventId: string }) {
           </ValidationBanner>
         )}
 
-        {QUESTION_SECTIONS.map((section) => {
-          const sectionQuestions = questions.filter((q) => q.sectionId === section.id);
+        {asked.length > 1 && (
+          <Card
+            title="This event asks in more than one category"
+            hint="Each category is asked its own questions, drawn from its own library, and goes only to the suppliers shortlisted for it."
+          >
+            <Segmented
+              value={current.id}
+              onChange={setActiveId}
+              options={asked.map((q) => ({
+                value: q.id,
+                label: `${q.category ?? 'Whole ask'} · ${q.questions.length}`,
+              }))}
+            />
+            <div style={{ fontSize: 11.5, color: color.textSecondary, marginTop: 9, lineHeight: 1.6 }}>
+              Showing <strong>{current.name}</strong>
+              {current.category !== null && current.category !== undefined && <> for <strong>{current.category}</strong></>}.
+            </div>
+          </Card>
+        )}
+
+        {sections.map((section) => {
+          const sectionQuestions = section.questions;
           if (sectionQuestions.length === 0) return null;
           return (
-            <Card key={section.id} padded={false} title={section.name} hint={`${sectionQuestions.length} question(s)`}>
+            <Card key={section.id ?? 'ungrouped'} padded={false} title={section.name} hint={`${sectionQuestions.length} question(s)`}>
               <div>
                 {sectionQuestions.map((question, i) => {
                   const tone = ENVELOPE_TONE[question.envelope];

@@ -29,6 +29,7 @@ function event(over: Partial<SourcingEvent> = {}): SourcingEvent {
 
 function bidder(over: Partial<EventBidder> = {}): EventBidder {
   return {
+    categories: [],
     id: 'b1', eventId: 'e1', counterpartyId: 'cp-abc', isProvisional: false,
     invitedAt: NOW - HOUR, invitationStatus: 'SENT', declineReason: null,
     ndaAcceptedAt: null, participationStatus: 'NOT_STARTED', qualificationStatus: 'PENDING',

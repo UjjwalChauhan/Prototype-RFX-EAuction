@@ -19,7 +19,7 @@ import { serverNow } from '../server/clock';
 import { rehearsalOpen } from '../domain/auctionRehearsal';
 import {
   REQUEST_LABELS, REQUEST_PURPOSE, askableQuestions, draftFromResponse, missingRequired,
-  submissionFor, timeRemaining, toAnswers, vendorSections,
+  questionnairesForBidder, submissionFor, timeRemaining, toAnswers, vendorSections,
   type AnswerDraft, type VendorItem, type VendorSection,
 } from '../domain/vendorPortal';
 import { optionsOf } from '../domain/questionTypes';
@@ -279,21 +279,38 @@ function RequestRow({
  * evaluation model, the other bidders, or the internal approval chain reaches
  * this screen, because none of it is theirs to see.
  */
-function RequestDetail({
+/** Exported for the portal tests, which open an ask without a click. */
+export function RequestDetail({
   item, now, onBack,
 }: { item: VendorItem; now: number; onBack: () => void }) {
   const { state, dispatch } = useStore();
-  const questionnaire = state.questionnaires.find(
-    (q) => q.eventId === item.event.id && q.stage === item.point,
+  /**
+   * Every questionnaire this ask puts in front of *this* supplier.
+   *
+   * One ask can carry several: a consolidated event buys in more than one
+   * category and asks each market its own questions. A supplier shortlisted
+   * for part of the basket is asked only for their part — being handed the
+   * pallet questionnaire because somebody else's lines are in the same event
+   * is how a supplier concludes the buyer does not know what they sell.
+   */
+  const questionnaires = React.useMemo(
+    () => questionnairesForBidder(
+      state.questionnaires, item.event.id, item.point, item.bidder.categories,
+    ),
+    [state.questionnaires, item.event.id, item.point, item.bidder.categories],
   );
   // An ask answers against the basket of the sourcing event that raised it,
   // so this resolves through the family rather than matching on event id.
   const lots = lotsForEvent(state, item.event.id);
   const terms = termsForEvent(state, item.event.id);
-  const questions = React.useMemo(
-    () => askableQuestions(questionnaire?.questions ?? []),
-    [questionnaire],
+  // Grouped for display, flat for validation and submission — an answer belongs
+  // to a question, and which questionnaire carried it changes nothing about it.
+  const groups = React.useMemo(
+    () => questionnaires.map((q) => ({ questionnaire: q, questions: askableQuestions(q.questions) }))
+      .filter((group) => group.questions.length > 0),
+    [questionnaires],
   );
+  const questions = React.useMemo(() => groups.flatMap((g) => g.questions), [groups]);
 
   const submission = submissionFor(state.responses, item.event.id, item.bidder.id);
 
@@ -382,30 +399,54 @@ function RequestDetail({
         </PortalPanel>
       )}
 
-      <PortalPanel
-        title={questions.length > 0 ? `What we are asking (${questions.length})` : 'What we are asking'}
-      >
-        {questions.length === 0 ? (
+      {questions.length === 0 ? (
+        <PortalPanel title="What we are asking">
           <div style={{ fontSize: 14, color: color.textSecondary }}>
             No question set was attached to this ask. The buyer will be in touch with what they need.
           </div>
-        ) : (
-          <div className="rfx-stack" style={{ gap: 20 }}>
-            {questions.map((question, i) => (
-              <AnswerField
-                key={question.id}
-                index={i + 1}
-                question={question}
-                entry={draft[question.id]}
-                readOnly={!item.active}
-                flagged={showMissing && missing.some((m) => m.id === question.id)}
-                onValue={(value) => setAnswer(question.id, value)}
-                onAttachment={(name) => setAttachment(question.id, name)}
-              />
-            ))}
-          </div>
-        )}
-      </PortalPanel>
+        </PortalPanel>
+      ) : (
+        groups.map((group) => {
+          // The numbering runs across the whole submission rather than
+          // restarting per section: the supplier is answering one form, and
+          // "question 1" appearing three times is how an answer goes to the
+          // wrong place when they discuss it on the phone.
+          const offset = groups
+            .slice(0, groups.indexOf(group))
+            .reduce((sum, earlier) => sum + earlier.questions.length, 0);
+          return (
+            <PortalPanel
+              key={group.questionnaire.id}
+              title={
+                groups.length === 1
+                  ? `What we are asking (${group.questions.length})`
+                  : `${group.questionnaire.category ?? 'This ask'} — what we are asking (${group.questions.length})`
+              }
+            >
+              {groups.length > 1 && (
+                <div style={{ fontSize: 13, color: color.textSecondary, marginBottom: 14, lineHeight: 1.6 }}>
+                  This event buys in more than one category. These questions cover the
+                  <strong> {group.questionnaire.category}</strong> lines you were shortlisted for.
+                </div>
+              )}
+              <div className="rfx-stack" style={{ gap: 20 }}>
+                {group.questions.map((question, i) => (
+                  <AnswerField
+                    key={question.id}
+                    index={offset + i + 1}
+                    question={question}
+                    entry={draft[question.id]}
+                    readOnly={!item.active}
+                    flagged={showMissing && missing.some((m) => m.id === question.id)}
+                    onValue={(value) => setAnswer(question.id, value)}
+                    onAttachment={(name) => setAttachment(question.id, name)}
+                  />
+                ))}
+              </div>
+            </PortalPanel>
+          );
+        })
+      )}
 
       {/*
         The terms this ask is sent under. A supplier is entitled to see what

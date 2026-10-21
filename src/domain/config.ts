@@ -10,6 +10,7 @@
  * scope it resolved from, whether it is locked, and the inheritance chain.
  * `resolve` returns all four so a screen cannot show the value alone.
  */
+import { P2P_PLUGIN_DEFAULTS } from './controlRoom';
 import type { ConfigScopeType, ConfigSetting, Id, ResolvedConfig } from './types';
 
 /** Narrowest last. */
@@ -184,4 +185,8 @@ export const TENANT_DEFAULTS: Record<string, unknown> = {
   'counterparty.provisional_award_allowed': false,
   'compare.basis': 'LANDED',
   'agents.disclose_ai_scoring_to_suppliers': true,
+  // The wider Procure-to-Pay suite's plugins. Merged in rather than written out
+  // again, so the Control Room grid and the resolver cannot disagree about what
+  // a plugin starts as.
+  ...P2P_PLUGIN_DEFAULTS,
 };

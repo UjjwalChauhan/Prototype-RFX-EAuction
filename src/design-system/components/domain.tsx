@@ -29,10 +29,11 @@ export interface ValidationItem {
 }
 
 const VALIDATION_TONE: Record<ValidationTone, { icon: string; fg: string; bg: string; border: string }> = {
-  error: { icon: '✕', fg: color.dangerText, bg: color.dangerSoft, border: '#FCA5A5' },
-  warning: { icon: '●', fg: color.warningText, bg: color.warningSoft, border: '#FCD34D' },
-  info: { icon: 'ⓘ', fg: color.infoText, bg: color.infoSoft, border: '#7DD3FC' },
-  success: { icon: '✓', fg: color.successText, bg: color.successSoft, border: '#86EFAC' },
+  // Borders are the reference's chip borders: one step darker than the fill.
+  error: { icon: '✕', fg: color.dangerText, bg: color.dangerSoft, border: '#F6CFD0' },
+  warning: { icon: '●', fg: color.warningText, bg: color.warningSoft, border: '#F1DDA6' },
+  info: { icon: 'ⓘ', fg: color.infoText, bg: color.infoSoft, border: '#CFDDFB' },
+  success: { icon: '✓', fg: color.successText, bg: color.successSoft, border: '#C7EBD7' },
 };
 
 export function ValidationBanner({ tone, title, children, action }: {

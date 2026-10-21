@@ -8,6 +8,7 @@
 import React from 'react';
 import { color, radius } from '../design-system/tokens';
 import { Avatar, Button, Chip } from '../design-system/components/primitives';
+import { Icon, type AdminIconName } from './AdminIcons';
 import { ValidationBanner } from '../design-system/components/domain';
 import { useStore } from '../store/store';
 import { USERS } from '../data/seed';
@@ -33,7 +34,101 @@ export interface NavItem {
   group?: string;
 }
 
-const SOURCING_ROUTES = ['board', 'requests', 'intake', 'create', 'event', 'list'];
+/**
+ * The rail, as data.
+ *
+ * Declarative because the shape is the point: everything the buyer does to
+ * source something lives under one group, so "where do I raise an RFP" has one
+ * answer. RFI / RFP / RFQ and the auction are listed as siblings of the
+ * Sourcing Board rather than nested a level deeper — they are filtered views
+ * of one object, and burying them made them look like separate records.
+ *
+ * Rows without a route are the reference's own surrounding modules, kept so
+ * the sourcing work sits in a recognisable product rather than alone.
+ */
+type NavLeaf = { label: string; route?: Route; badge?: string };
+/** A child is a row, or a nested group that opens the same way its parent does. */
+type NavChild = NavLeaf | { label: string; children: NavLeaf[] };
+type NavEntry =
+  | { kind: 'section'; label: string }
+  | { kind: 'item'; label: string; icon: AdminIconName; route?: Route; badge?: string }
+  | { kind: 'group'; label: string; icon: AdminIconName; children: NavChild[] };
+
+const isNested = (c: NavChild): c is { label: string; children: NavLeaf[] } =>
+  'children' in c;
+
+/** Every leaf under a child, nested or not — used to test whether it holds the route. */
+const leavesOf = (c: NavChild): NavLeaf[] => (isNested(c) ? c.children : [c]);
+
+const NAV: NavEntry[] = [
+  { kind: 'item', label: 'Dashboard', icon: 'gauge', route: { name: 'board' } },
+
+  { kind: 'section', label: 'Hierarchy & Enforcement' },
+  { kind: 'group', label: 'Organisation', icon: 'org', children: [
+    { label: 'Offices' }, { label: 'Employees' },
+  ] },
+  { kind: 'item', label: 'Configuration Studio', icon: 'lock', route: { name: 'config' } },
+  { kind: 'item', label: 'DoA & Agent Console', icon: 'sparkle', route: { name: 'agents' } },
+  { kind: 'item', label: 'Approval Requests', icon: 'checkSq', route: { name: 'approvals' }, badge: '7' },
+
+  { kind: 'section', label: 'AP & Procurement' },
+  { kind: 'item', label: 'Vendor Management', icon: 'userBox' },
+  { kind: 'item', label: 'Product & Stock', icon: 'box' },
+  { kind: 'item', label: 'Invoice Management', icon: 'doc' },
+  /**
+   * Everything that sources something, in the order a buyer meets it.
+   *
+   * The three written asks are gathered under RFX because they are one family
+   * — same shape of work, same screens, told apart only by what is being asked
+   * for. Creating an event is not listed: it is an action the board, the
+   * intake screen and the PR workbench each offer in context, and a rail row
+   * for it would be a fourth way to start the same thing.
+   */
+  { kind: 'group', label: 'Procurement', icon: 'layers', children: [
+    { label: 'Intake / PR Workbench', route: { name: 'intake' } },
+    { label: 'Purchase Request', route: { name: 'requests' } },
+    { label: 'Sourcing Board', route: { name: 'board' } },
+    { label: 'RFX', children: [
+      { label: 'Request for Information', route: { name: 'list', stage: 'RFI' } },
+      { label: 'Request for Proposal', route: { name: 'list', stage: 'RFP' } },
+      { label: 'Request for Quotation', route: { name: 'list', stage: 'RFQ' } },
+    ] },
+    { label: 'E-Auction', route: { name: 'list', stage: 'AUCTION' }, badge: 'LIVE_AUCTIONS' },
+    { label: 'Purchase Order' },
+    { label: 'Vendor Catalog' },
+  ] },
+  { kind: 'item', label: 'Contract Management', icon: 'doc' },
+  { kind: 'item', label: 'Vendor Advance', icon: 'wallet' },
+
+  { kind: 'section', label: 'Treasury & Finances' },
+  { kind: 'item', label: 'Account Payables', icon: 'doc' },
+  { kind: 'item', label: 'Vendor Settlements', icon: 'userBox' },
+  { kind: 'item', label: 'Bank Guarantee', icon: 'archive' },
+
+  { kind: 'section', label: 'Payments' },
+  { kind: 'item', label: 'Payout', icon: 'person' },
+
+  { kind: 'section', label: 'Others' },
+  { kind: 'item', label: 'Repository', icon: 'archive' },
+  { kind: 'item', label: 'Reports', icon: 'chart' },
+  { kind: 'item', label: 'Export Wizard', icon: 'exportI' },
+  { kind: 'item', label: 'Audit Logs', icon: 'scan' },
+];
+
+/**
+ * Which groups to open when a route is reached directly, by URL or by a link.
+ *
+ * A chain rather than a single name: an RFP reached from a link has to open
+ * Procurement *and* the RFX group inside it, or the rail sits shut beside the
+ * screen it is describing.
+ */
+function groupsFor(route: Route): string[] {
+  const WRITTEN = ['RFI', 'RFP', 'RFQ'];
+  if (route.name === 'list' && WRITTEN.includes(route.stage)) return ['Procurement', 'RFX'];
+  return ['board', 'requests', 'intake', 'create', 'event', 'list'].includes(route.name)
+    ? ['Procurement']
+    : [];
+}
 
 export function AdminShell({
   route, onNavigate, title, subtitle, breadcrumb, primaryAction, tabs, stageRail, children,
@@ -50,43 +145,112 @@ export function AdminShell({
 }) {
   const { state, dispatch } = useStore();
   const [collapsed, setCollapsed] = React.useState(false);
-  const [procOpen, setProcOpen] = React.useState(true);
-  const [sourcingOpen, setSourcingOpen] = React.useState(true);
-  const [rfxOpen, setRfxOpen] = React.useState(true);
   const [userMenuOpen, setUserMenuOpen] = React.useState(false);
+  /**
+   * Which groups are expanded. Seeded from the route so that landing on an
+   * auction with a link opens Procurement around it rather than leaving the
+   * rail closed beside the screen it is describing.
+   */
+  const [openGroups, setOpenGroups] = React.useState<Set<string>>(
+    () => new Set(groupsFor(route).length > 0 ? groupsFor(route) : ['Procurement']),
+  );
+  const toggleGroup = (label: string) =>
+    setOpenGroups((held) => {
+      const next = new Set(held);
+      if (next.has(label)) next.delete(label); else next.add(label);
+      return next;
+    });
+
+  /** Navigating into a group's territory opens it, and never closes another. */
+  const landedIn = groupsFor(route).join('/');
+  React.useEffect(() => {
+    if (!landedIn) return;
+    const wanted = landedIn.split('/');
+    setOpenGroups((held) => {
+      if (wanted.every((g) => held.has(g))) return held;
+      const next = new Set(held);
+      for (const g of wanted) next.add(g);
+      return next;
+    });
+  }, [landedIn]);
 
   const liveAuctions = state.events.filter((e) => e.status === 'AUCTION_LIVE');
-  const showSectionRail = SOURCING_ROUTES.includes(route.name);
 
   const isActive = (candidate: Route['name'], extra?: string) => {
     if (route.name !== candidate) return false;
     if (candidate === 'list' && extra) return (route as { stage: string }).stage === extra;
     return true;
   };
+  /** The same test, against a whole route — what the declarative tree carries. */
+  const isActiveRoute = (candidate: Route) =>
+    isActive(candidate.name, candidate.name === 'list' ? candidate.stage : undefined);
 
   const navRow = (
     label: string,
-    icon: string,
-    opts: { active?: boolean; onClick?: () => void; badge?: string; indent?: number; caret?: string } = {},
+    icon: AdminIconName,
+    opts: {
+      active?: boolean; onClick?: () => void; badge?: string;
+      caret?: AdminIconName; groupActive?: boolean;
+    } = {},
   ) => (
     <button
       key={label}
       type="button"
       className="rfx-navrow"
       onClick={opts.onClick}
+      title={collapsed ? label : undefined}
       style={{
         display: 'flex', alignItems: 'center', gap: 9, width: '100%', textAlign: 'left',
         border: 'none', cursor: opts.onClick ? 'pointer' : 'default',
-        padding: `7px 10px 7px ${10 + (opts.indent ?? 0) * 14}px`,
+        padding: '7px 8px',
         background: opts.active ? color.brandPrimarySoft : 'transparent',
-        color: opts.active ? color.brandPrimary : color.textBody,
-        fontWeight: opts.active ? 600 : 400, fontSize: 12.5, borderRadius: radius.control,
+        color: opts.active || opts.groupActive ? color.brandPrimaryStrong : color.textBody,
+        fontWeight: opts.active || opts.groupActive ? 500 : 400,
+        fontSize: 12, borderRadius: radius.nav,
       }}
     >
-      <span aria-hidden style={{ width: 16, textAlign: 'center', flexShrink: 0 }}>{icon}</span>
+      <span style={{ color: opts.active || opts.groupActive ? color.brandPrimary : '#55555F', display: 'flex' }}>
+        <Icon name={icon} />
+      </span>
       {!collapsed && <span style={{ flex: 1, minWidth: 0 }}>{label}</span>}
       {!collapsed && opts.badge && <Chip tone="brand">{opts.badge}</Chip>}
-      {!collapsed && opts.caret && <span aria-hidden style={{ fontSize: 9, color: color.textMuted }}>{opts.caret}</span>}
+      {!collapsed && opts.caret && (
+        <span style={{ color: color.textMuted, display: 'flex' }}><Icon name={opts.caret} size={11} stroke={2} /></span>
+      )}
+    </button>
+  );
+
+  /** A row inside a group's panel: a destination, or a nested group's header. */
+  const navLeaf = ({
+    label, route: to, badge, on, caret, strong, onClick,
+  }: {
+    label: string; route?: Route; badge?: string; on?: boolean;
+    caret?: AdminIconName; strong?: boolean; onClick?: () => void;
+  }) => (
+    <button
+      key={label}
+      type="button"
+      className={`rfx-navrow ${on ? 'on' : ''}`}
+      onClick={onClick ?? (to ? () => onNavigate(to) : undefined)}
+      style={{
+        display: 'flex', alignItems: 'center', gap: 8, width: '100%',
+        textAlign: 'left', border: 'none', background: 'transparent',
+        cursor: to || onClick ? 'pointer' : 'default',
+        padding: '6px 8px', borderRadius: radius.nav, fontSize: 11,
+        color: strong ? color.brandPrimaryStrong : 'inherit',
+        fontWeight: strong ? 600 : undefined,
+      }}
+    >
+      <span style={{ flex: 1, minWidth: 0 }}>{label}</span>
+      {badge === 'LIVE_AUCTIONS' && liveAuctions.length > 0 && (
+        <Chip tone="danger">{liveAuctions.length} live</Chip>
+      )}
+      {badge && badge !== 'LIVE_AUCTIONS' && <Chip tone="brand">{badge}</Chip>}
+      {caret && (
+        <span style={{ color: color.textMuted, display: 'flex' }}>
+          <Icon name={caret} size={11} stroke={2} />
+        </span>
+      )}
     </button>
   );
 
@@ -118,89 +282,146 @@ export function AdminShell({
         <nav
           aria-label="Global navigation"
           style={{
-            width: collapsed ? 56 : 210, flexShrink: 0,
+            width: collapsed ? 56 : 200, flexShrink: 0,
             background: color.surface, borderRight: `1px solid ${color.border}`,
             display: 'flex', flexDirection: 'column', position: 'sticky', top: 0, height: '100vh',
           }}
         >
-          <div style={{ padding: '12px 10px', borderBottom: `1px solid ${color.border}` }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span
-                style={{
-                  width: 26, height: 26, borderRadius: 6, background: color.textPrimary,
-                  color: '#fff', display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                  fontSize: 13, fontWeight: 700, flexShrink: 0,
-                }}
-              >
-                B
-              </span>
-              {!collapsed && (
-                <span>
-                  <span style={{ display: 'block', fontSize: 13, fontWeight: 700 }}>Bajel</span>
-                  <span style={{ display: 'block', fontSize: 10.5, color: color.textSecondary }}>
-                    Admin platform
-                  </span>
-                </span>
-              )}
+          {/* Brand block — the reference's tile, name, sign-in and tool row. */}
+          <div style={{ padding: '14px 8px 10px' }}>
+            <div
+              style={{
+                width: 30, height: 30, borderRadius: 6,
+                background: 'linear-gradient(135deg,#6C5DD3,#9B7BE6)',
+                color: '#fff', display: 'grid', placeItems: 'center',
+                fontSize: 13, fontWeight: 700, boxShadow: '0 1px 2px rgba(0,0,0,.15)',
+              }}
+            >
+              B
             </div>
-          </div>
-
-          <div style={{ flex: 1, overflowY: 'auto', padding: 6 }}>
-            {navRow('Dashboard', '▦', { active: false, onClick: () => onNavigate({ name: 'board' }) })}
-
-            {!collapsed && <RailGroup>Hierarchy & enforcement</RailGroup>}
-            {navRow('Configuration Studio', '⚙', { active: isActive('config'), onClick: () => onNavigate({ name: 'config' }) })}
-            {navRow('DoA & Agent Console', '✦', { active: isActive('agents'), onClick: () => onNavigate({ name: 'agents' }) })}
-            {navRow('Approval Requests', '✓', {
-              active: isActive('approvals'),
-              onClick: () => onNavigate({ name: 'approvals' }),
-              badge: '7',
-            })}
-
-            {!collapsed && <RailGroup>AP & procurement</RailGroup>}
-            {navRow('Procurement', '🛒', { onClick: () => setProcOpen((v) => !v), caret: procOpen ? '▾' : '▸' })}
-            {procOpen && !collapsed && (
+            {!collapsed && (
               <>
-                {navRow('Purchase Request', '▤', {
-                  indent: 1,
-                  active: isActive('requests'),
-                  onClick: () => onNavigate({ name: 'requests' }),
-                })}
-                {navRow('Sourcing', '◈', {
-                  indent: 1,
-                  onClick: () => setSourcingOpen((v) => !v),
-                  caret: sourcingOpen ? '▾' : '▸',
-                })}
-                {sourcingOpen && (
-                  <>
-                    {navRow('Sourcing Board', '·', { indent: 2, active: isActive('board'), onClick: () => onNavigate({ name: 'board' }) })}
-                    {navRow('Intake / PR Workbench', '·', { indent: 2, active: isActive('intake'), onClick: () => onNavigate({ name: 'intake' }) })}
-                    {navRow('Create Event', '＋', { indent: 2, active: isActive('create'), onClick: () => onNavigate({ name: 'create' }) })}
-                  </>
-                )}
-
-                {/* RFI/RFP/RFQ are shortcuts into one object, not separate objects. */}
-                <RailGroup indent>Shortcuts</RailGroup>
-                {navRow('RFX', '↗', { indent: 1, onClick: () => setRfxOpen((v) => !v), caret: rfxOpen ? '▾' : '▸' })}
-                {rfxOpen && (
-                  <>
-                    {navRow('Request for Information', '·', { indent: 2, active: isActive('list', 'RFI'), onClick: () => onNavigate({ name: 'list', stage: 'RFI' }) })}
-                    {navRow('Request for Proposal', '·', { indent: 2, active: isActive('list', 'RFP'), onClick: () => onNavigate({ name: 'list', stage: 'RFP' }) })}
-                    {navRow('Request for Quotation', '·', { indent: 2, active: isActive('list', 'RFQ'), onClick: () => onNavigate({ name: 'list', stage: 'RFQ' }) })}
-                  </>
-                )}
-                {navRow('E-Auction', '↗', {
-                  indent: 1,
-                  active: isActive('list', 'AUCTION'),
-                  onClick: () => onNavigate({ name: 'list', stage: 'AUCTION' }),
-                  badge: liveAuctions.length > 0 ? `${liveAuctions.length} live` : undefined,
-                })}
-                {navRow('Purchase Order', '▥', { indent: 1 })}
-                {navRow('Vendor Catalog', '▣', { indent: 1 })}
+                <div style={{ fontWeight: 600, fontSize: 12, marginTop: 8 }}>Admin — Bajel</div>
+                <div style={{ fontSize: 10, color: color.textSecondary }}>{state.currentUser.email}</div>
+                <div style={{ display: 'flex', gap: 6, marginTop: 10 }}>
+                  {([
+                    ['gear', 'Configuration Studio', () => onNavigate({ name: 'config' })],
+                    ['search', 'Search', undefined],
+                    ['logout', 'Open the vendor portal', () => dispatch({ type: 'SET_SURFACE', surface: 'PORTAL' })],
+                  ] as const).map(
+                    ([name, title, run]) => (
+                      <button
+                        key={name}
+                        type="button"
+                        title={title}
+                        aria-label={title}
+                        className="rfx-brandtool"
+                        onClick={run}
+                        disabled={!run}
+                        style={{
+                          width: 24, height: 24, borderRadius: '50%', cursor: run ? 'pointer' : 'default',
+                          border: `1px solid ${color.border}`, background: '#fff',
+                          display: 'grid', placeItems: 'center',
+                          color: run ? color.textSecondary : color.textMuted,
+                        }}
+                      >
+                        <Icon name={name} size={11} />
+                      </button>
+                    ),
+                  )}
+                </div>
               </>
             )}
-            {navRow('Contract Management', '▦', {})}
-            {navRow('Vendor Management', '⚑', {})}
+          </div>
+
+          <div style={{ flex: 1, overflowY: 'auto', padding: '0 8px 24px' }}>
+            {NAV.map((entry, i) => {
+              if (entry.kind === 'section') {
+                return collapsed ? null : <RailGroup key={`s${i}`}>{entry.label}</RailGroup>;
+              }
+              if (entry.kind === 'item') {
+                return navRow(entry.label, entry.icon, {
+                  active: entry.route ? isActiveRoute(entry.route) : false,
+                  onClick: entry.route ? () => onNavigate(entry.route!) : undefined,
+                  badge: entry.badge === 'LIVE_AUCTIONS'
+                    ? (liveAuctions.length > 0 ? `${liveAuctions.length} live` : undefined)
+                    : entry.badge,
+                });
+              }
+
+              /**
+               * A group and its children, as one block.
+               *
+               * The children sit in a tinted panel hanging off the group row
+               * rather than being indented under it, so the relationship is
+               * carried by the surface. That is what lets a selected child read
+               * as selected — it lifts onto white, out of the tint.
+               */
+              const open = openGroups.has(entry.label);
+              const holdsRoute = entry.children
+                .flatMap(leavesOf)
+                .some((leaf) => leaf.route && isActiveRoute(leaf.route));
+              return (
+                <div
+                  key={entry.label}
+                  className={`rfx-navgroup ${open && !collapsed ? 'open' : ''} ${holdsRoute ? 'active' : ''}`}
+                >
+                  {navRow(entry.label, entry.icon, {
+                    onClick: () => toggleGroup(entry.label),
+                    caret: open ? 'chevUp' : 'chevDown',
+                    groupActive: holdsRoute,
+                  })}
+                  {open && !collapsed && (
+                    <div className="rfx-navsub">
+                      {entry.children.map((child) => {
+                        /**
+                         * A nested group behaves exactly like its parent —
+                         * same caret, same expand, same panel one tint deeper.
+                         * A selected leaf still lifts onto white at either
+                         * level, so "white means you are here" holds whatever
+                         * depth the row sits at.
+                         */
+                        if (isNested(child)) {
+                          const subOpen = openGroups.has(child.label);
+                          const subHolds = child.children.some(
+                            (leaf) => leaf.route && isActiveRoute(leaf.route),
+                          );
+                          return (
+                            <div
+                              key={child.label}
+                              className={`rfx-navgroup nested ${subOpen ? 'open' : ''} ${subHolds ? 'active' : ''}`}
+                            >
+                              {navLeaf({
+                                label: child.label,
+                                onClick: () => toggleGroup(child.label),
+                                caret: subOpen ? 'chevUp' : 'chevDown',
+                                strong: subHolds,
+                              })}
+                              {subOpen && (
+                                <div className="rfx-navsub nested">
+                                  {child.children.map((leaf) => navLeaf({
+                                    label: leaf.label,
+                                    route: leaf.route,
+                                    badge: leaf.badge,
+                                    on: !!leaf.route && isActiveRoute(leaf.route),
+                                  }))}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        }
+                        return navLeaf({
+                          label: child.label,
+                          route: child.route,
+                          badge: child.badge,
+                          on: !!child.route && isActiveRoute(child.route),
+                        });
+                      })}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
 
           <div style={{ padding: 8, borderTop: `1px solid ${color.border}` }}>
@@ -209,52 +430,6 @@ export function AdminShell({
             </Button>
           </div>
         </nav>
-
-        {/* ================= SECTION RAIL ================= */}
-        {showSectionRail && (
-          <nav
-            aria-label="Sourcing"
-            style={{
-              width: 172, flexShrink: 0, background: '#FCFCFD',
-              borderRight: `1px solid ${color.border}`, padding: 10,
-              position: 'sticky', top: 0, height: '100vh', overflowY: 'auto',
-            }}
-          >
-            <div
-              style={{
-                fontSize: 10.5, fontWeight: 700, letterSpacing: '.05em',
-                textTransform: 'uppercase', color: color.textSecondary, padding: '4px 8px 8px',
-              }}
-            >
-              Sourcing
-            </div>
-            {[
-              { label: 'Sourcing Board', route: { name: 'board' } as Route, active: isActive('board') },
-              { label: 'Intake', route: { name: 'intake' } as Route, active: isActive('intake') },
-              { label: 'Create Event', route: { name: 'create' } as Route, active: isActive('create') },
-              { label: 'RFIs', route: { name: 'list', stage: 'RFI' } as Route, active: isActive('list', 'RFI') },
-              { label: 'RFPs', route: { name: 'list', stage: 'RFP' } as Route, active: isActive('list', 'RFP') },
-              { label: 'RFQs', route: { name: 'list', stage: 'RFQ' } as Route, active: isActive('list', 'RFQ') },
-              { label: 'E-Auctions', route: { name: 'list', stage: 'AUCTION' } as Route, active: isActive('list', 'AUCTION') },
-            ].map((item) => (
-              <button
-                key={item.label}
-                type="button"
-                className="rfx-navrow"
-                onClick={() => onNavigate(item.route)}
-                style={{
-                  display: 'block', width: '100%', textAlign: 'left', border: 'none',
-                  cursor: 'pointer', padding: '7px 9px', borderRadius: radius.control,
-                  fontSize: 12.5, fontWeight: item.active ? 600 : 400,
-                  background: item.active ? color.brandPrimarySoft : 'transparent',
-                  color: item.active ? color.brandPrimary : color.textSecondary,
-                }}
-              >
-                {item.label}
-              </button>
-            ))}
-          </nav>
-        )}
 
         {/* ================= MAIN ================= */}
         <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
@@ -288,20 +463,24 @@ export function AdminShell({
             </div>
           )}
 
+          {/* The reference's page head: a sticky 56px bar, 16px title, crumbs
+              under it. Deliberately quieter than the old 22px heading — the
+              screen's own content is what should carry the weight. */}
           <header
             style={{
               background: color.surface, borderBottom: `1px solid ${color.border}`,
-              padding: '13px 20px',
+              padding: '12px 24px', minHeight: 56,
+              position: 'sticky', top: 0, zIndex: 20,
             }}
           >
-            {breadcrumb && (
-              <div style={{ fontSize: 11.5, color: color.textSecondary, marginBottom: 5 }}>{breadcrumb}</div>
-            )}
             <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap' }}>
               <div>
-                <h1 style={{ margin: 0, fontSize: 22, fontWeight: 600, letterSpacing: '-0.01em' }}>{title}</h1>
+                <h1 style={{ margin: 0, fontSize: 16, fontWeight: 600 }}>{title}</h1>
+                {breadcrumb && (
+                  <div style={{ fontSize: 11, color: color.textSecondary, marginTop: 3 }}>{breadcrumb}</div>
+                )}
                 {subtitle && (
-                  <div style={{ fontSize: 12.5, color: color.textSecondary, marginTop: 3 }}>{subtitle}</div>
+                  <div style={{ fontSize: 11.5, color: color.textSecondary, marginTop: 3 }}>{subtitle}</div>
                 )}
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -376,7 +555,7 @@ export function AdminShell({
           {stageRail}
           {tabs}
 
-          <main style={{ padding: 20, flex: 1, minWidth: 0 }}>{children}</main>
+          <main style={{ padding: '18px 24px 40px', flex: 1, minWidth: 0 }}>{children}</main>
         </div>
       </div>
     </div>
@@ -387,8 +566,8 @@ function RailGroup({ children, indent }: { children: React.ReactNode; indent?: b
   return (
     <div
       style={{
-        fontSize: 10, fontWeight: 700, letterSpacing: '.05em', textTransform: 'uppercase',
-        color: color.textMuted, padding: `10px ${indent ? 24 : 10}px 4px`,
+        fontSize: 10, fontWeight: 500, color: color.textMuted,
+        padding: `12px ${indent ? 22 : 8}px 4px`,
       }}
     >
       {children}

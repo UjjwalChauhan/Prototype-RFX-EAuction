@@ -18,14 +18,16 @@ import type { QuestionnaireTemplate, VendorInputPoint } from '../../domain/types
 
 const RFI = TENANT_TEMPLATES.find((t) => t.code === 'QT-RFI-QUALIFICATION') as QuestionnaireTemplate;
 
-function paint(draft: Draft, points: VendorInputPoint[] = ['RFI']): string {
+function paint(
+  draft: Draft, points: VendorInputPoint[] = ['RFI'], categories: string[] = [],
+): string {
   return renderToString(
     <StoreProvider>
       <QuestionnaireStep
         draft={draft}
         patch={() => {}}
         points={points}
-        category={draft.category}
+        categories={categories}
       />
     </StoreProvider>,
   )
@@ -41,7 +43,7 @@ function seededDraft(points: VendorInputPoint[]): Draft {
   return {
     ...INITIAL_DRAFT,
     questionnaires: seedQuestionnaires({
-      existing: [], points, library: TENANT_TEMPLATES, category: null, idSeed: 'test',
+      existing: [], points, library: TENANT_TEMPLATES, categories: [null], idSeed: 'test',
     }),
   };
 }

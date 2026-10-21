@@ -236,10 +236,10 @@ export function Table<T>({
               <th
                 key={col.key}
                 style={{
-                  ...type.tableHeader,
+                  fontSize: 11, fontWeight: 500,
                   textAlign: col.align ?? (col.numeric ? 'right' : 'left'),
-                  color: color.textSecondary,
-                  padding: '9px 12px',
+                  color: color.textPrimary,
+                  padding: '10px 10px',
                   borderBottom: `1px solid ${color.border}`,
                   width: col.width,
                   whiteSpace: 'nowrap',
@@ -262,10 +262,14 @@ export function Table<T>({
                   style={{
                     height: rowHeight,
                     cursor: onRowClick ? 'pointer' : 'default',
-                    // An expanded row owns the panel below it, so the border
-                    // belongs at the bottom of the panel rather than here.
-                    borderBottom: expanded ? 'none' : `1px solid ${color.border}`,
-                    background: expanded ? color.brandPrimarySoft : undefined,
+                    /**
+                     * Zebra rather than a rule under every row: at this density
+                     * a line per row turns the table into a grid of boxes, and
+                     * the eye loses the row it was tracking across.
+                     */
+                    background: expanded
+                      ? color.brandPrimarySoft
+                      : index % 2 === 1 ? color.rowAlt : undefined,
                     ...rowStyle?.(row, index),
                   }}
                 >
@@ -273,7 +277,8 @@ export function Table<T>({
                     <td
                       key={col.key}
                       style={{
-                        padding: '8px 12px',
+                        padding: '9px 10px',
+                        fontSize: 11.5,
                         textAlign: col.align ?? (col.numeric ? 'right' : 'left'),
                         fontVariantNumeric: col.numeric ? 'tabular-nums' : undefined,
                         fontFamily: col.numeric ? font.mono : undefined,

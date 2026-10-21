@@ -20,8 +20,8 @@
  * the admin platform enforces from the other side.
  */
 import type {
-  Answer, Counterparty, EventBidder, EventStatus, Id, Question, QuestionType, Response,
-  ServerMillis, SourcingEvent, VendorInputPoint,
+  Answer, Counterparty, EventBidder, EventStatus, Id, Question, QuestionType, Questionnaire,
+  Response, ServerMillis, SourcingEvent, VendorInputPoint,
 } from './types';
 
 /** The three ways a supplier is asked for a written response. */
@@ -315,6 +315,31 @@ export function missingRequired(
 export const NON_ASKING_TYPES: QuestionType[] = [
   'section', 'page_break', 'instruction_block', 'hidden_metadata',
 ];
+
+/**
+ * The questionnaires one ask puts in front of one supplier.
+ *
+ * An ask carries one questionnaire per category in its basket. A supplier is
+ * shortlisted per category too, so they are asked for their categories and no
+ * others — an empty `categories` on the invitation means the whole basket,
+ * which is the ordinary single-category case and the only safe reading of a
+ * roster recorded before categories were kept.
+ *
+ * A questionnaire with no category covers the whole ask and always applies.
+ */
+export function questionnairesForBidder(
+  questionnaires: Questionnaire[],
+  eventId: Id,
+  point: VendorInputPoint,
+  bidderCategories: string[] = [],
+): Questionnaire[] {
+  return questionnaires.filter((questionnaire) => {
+    if (questionnaire.eventId !== eventId || questionnaire.stage !== point) return false;
+    const category = questionnaire.category ?? null;
+    if (category === null) return true;
+    return bidderCategories.length === 0 || bidderCategories.includes(category);
+  });
+}
 
 /** The questions a supplier is actually expected to fill in. */
 export function askableQuestions(questions: Question[]): Question[] {

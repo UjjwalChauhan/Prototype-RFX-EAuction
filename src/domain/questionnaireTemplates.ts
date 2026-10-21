@@ -26,8 +26,8 @@
 import { STAGE_LABELS } from './journeyPatterns';
 import { carryConfig, defaultConfigFor, validateQuestionConfig } from './questionTypes';
 import type {
-  Id, QuestionType, QuestionnaireTemplate, ServerMillis, Stage, StageWeight,
-  TemplateQuestion, TemplateSection, TemplateStatus, VendorInputPoint,
+  Id, QuestionType, Questionnaire, QuestionnaireTemplate, ServerMillis, SourcingEvent, Stage,
+  StageWeight, TemplateQuestion, TemplateSection, TemplateStatus, VendorInputPoint,
 } from './types';
 
 /** Question types that carry a price. None of them may be weighted. */
@@ -113,18 +113,31 @@ export function questionsInSection(
 // Applying templates across a journey
 // ---------------------------------------------------------------------------
 
-/** Templates that may be used at a point, for a category. */
+/**
+ * Templates that may be used at a point, for a category — the ones written for
+ * that category first.
+ *
+ * A template declaring no categories serves any of them, which is right for a
+ * tenant-wide price schedule and wrong as a *default* for a category that has
+ * written its own. The whole purpose of a category library is that its
+ * questions beat the generic ones, so a template naming this category sorts
+ * ahead of one that merely does not exclude it. The order within each group is
+ * the library's own, so the chain still reads narrowest-first.
+ */
 export function templatesFor(
   templates: QuestionnaireTemplate[],
   point: VendorInputPoint,
   category: string | null = null,
 ): QuestionnaireTemplate[] {
-  return templates.filter(
+  const available = templates.filter(
     (t) =>
       t.status !== 'RETIRED' &&
       t.appliesTo.includes(point) &&
       (category === null || t.categories.length === 0 || t.categories.includes(category)),
   );
+  if (category === null) return available;
+  const named = available.filter((t) => t.categories.includes(category));
+  return [...named, ...available.filter((t) => !named.includes(t))];
 }
 
 /**
@@ -401,6 +414,89 @@ export function validateWeighting(
 }
 
 // ---------------------------------------------------------------------------
+// Deletion — a template is removable only while nothing has been asked from it
+// ---------------------------------------------------------------------------
+
+/**
+ * One event ask that was built from a library template.
+ *
+ * A questionnaire is a *copy* of the template, so deleting the template cannot
+ * corrupt an event that already went out. What deleting it does destroy is the
+ * ability to say what a supplier was asked and why — the template is the only
+ * place the authored intent survives in one piece, and an evaluation challenged
+ * six months later is answered from it. So the library keeps a template that
+ * anything has been asked from, and offers retirement instead: retired keeps it
+ * readable and out of every new event, which is what "stop using this" actually
+ * means.
+ */
+export interface TemplateUse {
+  eventId: Id;
+  /** The event's own reference, falling back to its id if it is not loaded. */
+  eventNumber: string;
+  title: string;
+  stage: Stage;
+}
+
+/** The event asks built from one library template, newest reference first. */
+export function templateUses(
+  templateId: Id,
+  questionnaires: Questionnaire[],
+  events: SourcingEvent[],
+): TemplateUse[] {
+  return questionnaires
+    .filter((questionnaire) => questionnaire.sourceTemplateId === templateId)
+    .map((questionnaire) => {
+      const event = events.find((e) => e.id === questionnaire.eventId);
+      return {
+        eventId: questionnaire.eventId,
+        eventNumber: event?.eventNumber ?? questionnaire.eventId,
+        title: event?.title ?? 'No longer in this workspace',
+        stage: questionnaire.stage,
+      };
+    })
+    .sort((a, b) =>
+      a.eventNumber === b.eventNumber
+        ? a.stage.localeCompare(b.stage)
+        : b.eventNumber.localeCompare(a.eventNumber));
+}
+
+/** Uses grouped by template id, for a library listing that shows them all. */
+export function templateUseIndex(
+  templates: QuestionnaireTemplate[],
+  questionnaires: Questionnaire[],
+  events: SourcingEvent[],
+): Map<Id, TemplateUse[]> {
+  const index = new Map<Id, TemplateUse[]>();
+  for (const template of templates) {
+    index.set(template.id, templateUses(template.id, questionnaires, events));
+  }
+  return index;
+}
+
+/** The distinct events a set of uses covers. One event may ask at two points. */
+export function eventsUsing(uses: TemplateUse[]): string[] {
+  return Array.from(new Set(uses.map((use) => use.eventNumber)));
+}
+
+/**
+ * Why this template cannot be deleted, or null when it can be.
+ *
+ * Returned as a sentence rather than a boolean because the buyer needs to know
+ * *which* events hold it — "cannot delete" with nothing to act on is a dead end,
+ * and the first thing they will ask is where it is still in use.
+ */
+export function deletionBlock(uses: TemplateUse[]): string | null {
+  if (uses.length === 0) return null;
+  const events = eventsUsing(uses);
+  const shown = events.slice(0, 3).join(', ');
+  const rest = events.length - 3;
+  const where = rest > 0 ? `${shown} and ${rest} more` : shown;
+  return events.length === 1
+    ? `${where} was built from this template. Retire it instead — that keeps it readable and out of every new event.`
+    : `${events.length} events were built from this template (${where}). Retire it instead — that keeps it readable and out of every new event.`;
+}
+
+// ---------------------------------------------------------------------------
 // Construction
 // ---------------------------------------------------------------------------
 
@@ -502,6 +598,17 @@ export function newQuestion(
  */
 export interface DraftQuestionnaire {
   point: VendorInputPoint;
+  /**
+   * The category this questionnaire asks for.
+   *
+   * A questionnaire is chosen by category, not by event: the questions worth
+   * asking a pallet supplier are not the ones worth asking a stationery
+   * supplier, and a consolidated event buys from both. So an event spanning
+   * three categories carries three questionnaires at each point it asks at,
+   * each drawn from its own category's library. Null on an event that spans
+   * one category, where the distinction would be noise.
+   */
+  category: string | null;
   /** The library template this started from. Null once blank, or after edits. */
   templateId: Id | null;
   templateName: string;
@@ -514,10 +621,12 @@ export function instantiateTemplate(
   template: QuestionnaireTemplate,
   point: VendorInputPoint,
   idPrefix: string,
+  category: string | null = null,
 ): DraftQuestionnaire {
   const sectionIdOf = (id: Id) => `${idPrefix}-sec-${id}`;
   return {
     point,
+    category,
     templateId: template.id,
     templateName: template.name,
     sections: template.sections
@@ -541,10 +650,11 @@ export function instantiateTemplate(
 
 /** An empty questionnaire for a point, for a buyer who wants to start clean. */
 export function blankQuestionnaire(
-  point: VendorInputPoint, idPrefix: string,
+  point: VendorInputPoint, idPrefix: string, category: string | null = null,
 ): DraftQuestionnaire {
   return {
     point,
+    category,
     templateId: null,
     templateName: 'Blank',
     sections: [{ id: `${idPrefix}-sec-1`, name: 'General', sequence: 1 }],
@@ -564,7 +674,7 @@ export function draftAsTemplate(draft: DraftQuestionnaire): QuestionnaireTemplat
     name: draft.templateName || 'Questionnaire',
     description: '',
     appliesTo: [draft.point],
-    categories: [],
+    categories: draft.category === null ? [] : [draft.category],
     sections: draft.sections,
     questions: draft.questions,
     status: 'DRAFT',
@@ -752,21 +862,61 @@ export function removeDraftSection(
  * re-seeding it would silently discard their edits.
  */
 export function seedQuestionnaires({
-  existing, points, library, category, idSeed,
+  existing, points, library, categories, idSeed,
 }: {
   existing: DraftQuestionnaire[];
   points: VendorInputPoint[];
+  /**
+   * The library to pick from. On a consolidated event this is the union of
+   * every category's library, and `template.categories` decides which category
+   * each one serves — the caller does not have to resolve the chain per
+   * category for the seeding to come out right.
+   */
   library: QuestionnaireTemplate[];
-  category: string | null;
+  /**
+   * The categories the basket spans. One entry — or a single null — produces
+   * the ordinary one-questionnaire-per-point result.
+   */
+  categories: (string | null)[];
   idSeed: string;
 }): DraftQuestionnaire[] {
-  return points.map((point) => {
-    const already = existing.find((q) => q.point === point);
-    if (already) return already;
-    const options = templatesFor(library, point, category);
-    const prefix = `${idSeed}-${point.toLowerCase()}`;
-    return options.length > 0
-      ? instantiateTemplate(options[0], point, prefix)
-      : blankQuestionnaire(point, prefix);
-  });
+  const spans = categories.length === 0 ? [null] : categories;
+  return points.flatMap((point) =>
+    spans.map((category) => {
+      const already = existing.find((q) => q.point === point && q.category === category);
+      if (already) return already;
+      const options = templatesFor(library, point, category);
+      const prefix = `${idSeed}-${point.toLowerCase()}${category === null ? '' : `-${categorySlug(category)}`}`;
+      return options.length > 0
+        ? instantiateTemplate(options[0], point, prefix, category)
+        : blankQuestionnaire(point, prefix, category);
+    }),
+  );
+}
+
+/** A category reduced to something safe to put in an id. */
+export function categorySlug(category: string): string {
+  return category.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
+    || 'category';
+}
+
+/**
+ * The categories a basket spans, in the order a buyer meets them.
+ *
+ * Deliberately the lines' own categories rather than the event's: the event
+ * header carries one, and a consolidated event raised against six requisitions
+ * routinely buys in three. Falls back to the event's category for a basket
+ * whose lines were never classified.
+ */
+export function basketCategories(
+  lines: { category?: string | null }[], fallback: string | null = null,
+): string[] {
+  const seen: string[] = [];
+  for (const line of lines) {
+    const category = line.category === undefined || line.category === null || line.category.trim() === ''
+      ? fallback
+      : line.category;
+    if (category !== null && !seen.includes(category)) seen.push(category);
+  }
+  return seen;
 }

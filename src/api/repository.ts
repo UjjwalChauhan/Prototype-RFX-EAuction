@@ -12,7 +12,7 @@
  */
 import type {
   Auction, AuctionControlEvent, AuctionLot, Bid, EventBidder, Id, LineItem, Lot, Questionnaire,
-  SourcingEvent,
+  QuestionnaireTemplate, SourcingEvent,
 } from '../domain/types';
 import type { CreatedEvents } from '../domain/stageEvents';
 import type { EventExtension } from '../domain/eventTimeline';
@@ -39,6 +39,14 @@ export interface ApiState {
   lineItems: LineItem[];
   bidders: EventBidder[];
   questionnaires: Questionnaire[];
+  /**
+   * The questionnaire library the API can be asked for and written to.
+   *
+   * Held here rather than resolved from configuration because the API has no
+   * scope chain to resolve against — a caller names the scope it is writing at
+   * and the template carries it, which is the same shape the studio stores.
+   */
+  questionnaireTemplates: QuestionnaireTemplate[];
   /** Every deadline that has been moved. Append-only. */
   extensions: EventExtension[];
   /** The auctions, keyed in the list by the ask each one belongs to. */
@@ -51,6 +59,7 @@ export const emptyState = (): ApiState => ({
   lineItems: [],
   bidders: [],
   questionnaires: [],
+  questionnaireTemplates: [],
   extensions: [],
   auctions: [],
 });
@@ -72,6 +81,7 @@ export class Repository {
       lineItems: [...this.state.lineItems],
       bidders: [...this.state.bidders],
       questionnaires: [...this.state.questionnaires],
+      questionnaireTemplates: [...this.state.questionnaireTemplates],
       extensions: [...this.state.extensions],
       auctions: [...this.state.auctions],
     };
@@ -121,6 +131,56 @@ export class Repository {
 
   questionnairesOf(eventId: Id): Questionnaire[] {
     return this.state.questionnaires.filter((q) => q.eventId === eventId);
+  }
+
+  // -------------------------------------------------------------------------
+  // Questionnaires and the template library
+  // -------------------------------------------------------------------------
+
+  templates(): QuestionnaireTemplate[] {
+    return [...this.state.questionnaireTemplates];
+  }
+
+  template(id: Id): QuestionnaireTemplate | undefined {
+    return this.state.questionnaireTemplates.find((t) => t.id === id);
+  }
+
+  /** Add or replace one template. Replacing keeps its position in the library. */
+  saveTemplate(template: QuestionnaireTemplate): void {
+    const exists = this.state.questionnaireTemplates.some((t) => t.id === template.id);
+    this.state = {
+      ...this.state,
+      questionnaireTemplates: exists
+        ? this.state.questionnaireTemplates.map((t) => (t.id === template.id ? template : t))
+        : [...this.state.questionnaireTemplates, template],
+    };
+  }
+
+  deleteTemplate(id: Id): void {
+    this.state = {
+      ...this.state,
+      questionnaireTemplates: this.state.questionnaireTemplates.filter((t) => t.id !== id),
+    };
+  }
+
+  /** Attach a questionnaire to an event, replacing one already at its id. */
+  saveQuestionnaire(questionnaire: Questionnaire): void {
+    const exists = this.state.questionnaires.some((q) => q.id === questionnaire.id);
+    this.state = {
+      ...this.state,
+      questionnaires: exists
+        ? this.state.questionnaires.map((q) => (q.id === questionnaire.id ? questionnaire : q))
+        : [...this.state.questionnaires, questionnaire],
+    };
+  }
+
+  /** Every questionnaire in the store, for a usage check that spans events. */
+  allQuestionnaires(): Questionnaire[] {
+    return [...this.state.questionnaires];
+  }
+
+  allEvents(): SourcingEvent[] {
+    return [...this.state.events];
   }
 
   extensionsOf(eventId: Id): EventExtension[] {
@@ -184,6 +244,7 @@ export class Repository {
       lineItems: [...this.state.lineItems, ...created.lineItems],
       bidders: [...this.state.bidders, ...created.bidders],
       questionnaires: [...this.state.questionnaires, ...created.questionnaires],
+      questionnaireTemplates: this.state.questionnaireTemplates,
       extensions: this.state.extensions,
       auctions: created.auction === null
         ? this.state.auctions

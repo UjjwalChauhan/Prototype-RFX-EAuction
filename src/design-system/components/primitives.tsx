@@ -29,8 +29,9 @@ const BUTTON_VARIANTS: Record<ButtonVariant, React.CSSProperties> = {
 export function Button({
   variant = 'secondary', size = 'medium', loading, children, style, disabled, ...rest
 }: ButtonProps) {
-  const pad = size === 'small' ? '5px 11px' : '8px 14px';
-  const fontSize = size === 'small' ? 12 : 13;
+  // Reference density: a 28px control with 11.5px type, 22px for the small one.
+  const pad = size === 'small' ? '4px 9px' : '6px 12px';
+  const fontSize = size === 'small' ? 10.5 : 11.5;
   return (
     <button
       {...rest}
@@ -40,7 +41,7 @@ export function Button({
         borderRadius: radius.control,
         padding: variant === 'icon' ? '6px 9px' : pad,
         fontSize,
-        fontWeight: 600,
+        fontWeight: 500,
         cursor: disabled || loading ? 'not-allowed' : 'pointer',
         opacity: disabled || loading ? 0.55 : 1,
         display: 'inline-flex',
@@ -109,13 +110,17 @@ export interface ChipProps {
   title?: string;
 }
 
-const CHIP_TONES: Record<NonNullable<ChipProps['tone']>, { fg: string; bg: string }> = {
-  neutral: { fg: color.textBody, bg: color.neutralSoft },
-  brand: { fg: color.brandPrimary, bg: color.brandPrimarySoft },
-  purple: { fg: color.accentPurpleText, bg: color.accentPurpleSoft },
-  info: { fg: color.infoText, bg: color.infoSoft },
-  danger: { fg: color.dangerText, bg: color.dangerSoft },
-  gold: { fg: color.warningText, bg: color.warningSoft },
+/**
+ * The reference's chips: a soft fill with a border one step darker, which is
+ * what keeps them legible against both the white surface and the zebra row.
+ */
+const CHIP_TONES: Record<NonNullable<ChipProps['tone']>, { fg: string; bg: string; bd: string }> = {
+  neutral: { fg: color.textSecondary, bg: color.rowAlt, bd: color.border },
+  brand: { fg: color.brandPrimaryStrong, bg: color.brandPrimarySoft, bd: color.brandPrimaryTint },
+  purple: { fg: color.accentPurpleText, bg: color.accentPurpleSoft, bd: '#DDD3EC' },
+  info: { fg: color.infoText, bg: color.infoSoft, bd: '#CFDDFB' },
+  danger: { fg: color.danger, bg: color.dangerSoft, bd: '#F6CFD0' },
+  gold: { fg: color.warningText, bg: color.warningSoft, bd: '#F1DDA6' },
 };
 
 export function Chip({ children, tone = 'neutral', icon, title }: ChipProps) {
@@ -124,10 +129,10 @@ export function Chip({ children, tone = 'neutral', icon, title }: ChipProps) {
     <span
       title={title}
       style={{
-        display: 'inline-flex', alignItems: 'center', gap: 4,
-        background: t.bg, color: t.fg,
-        borderRadius: 5, padding: '2px 7px',
-        fontSize: 11, fontWeight: 600, whiteSpace: 'nowrap',
+        display: 'inline-flex', alignItems: 'center', gap: 5,
+        background: t.bg, color: t.fg, border: `1px solid ${t.bd}`,
+        borderRadius: radius.pill, padding: '2px 8px',
+        fontSize: 10.5, fontWeight: 500, whiteSpace: 'nowrap',
       }}
     >
       {icon && <span aria-hidden>{icon}</span>}
@@ -318,19 +323,30 @@ export interface ToggleProps {
   checked: boolean;
   onChange: (next: boolean) => void;
   label?: string;
+  /**
+   * The accessible name, where the switch carries no visible one.
+   *
+   * A plugin card already shows its title in 16px beside the switch, so
+   * repeating it as a second label is noise on screen — but a switch with no
+   * name at all is unusable to anyone not looking at the card. Falls back to
+   * `label` so every existing caller keeps the name it had.
+   */
+  ariaLabel?: string;
   disabled?: boolean;
   /** Explains why a control is permanently disabled — the agent hard limits. */
   disabledReason?: string;
 }
 
-export function Toggle({ checked, onChange, label, disabled, disabledReason }: ToggleProps) {
+export function Toggle({
+  checked, onChange, label, ariaLabel, disabled, disabledReason,
+}: ToggleProps) {
   return (
     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
       <button
         type="button"
         role="switch"
         aria-checked={checked}
-        aria-label={label}
+        aria-label={ariaLabel ?? label}
         title={disabledReason}
         disabled={disabled}
         onClick={() => !disabled && onChange(!checked)}

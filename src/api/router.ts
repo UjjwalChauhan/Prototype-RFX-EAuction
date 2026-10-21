@@ -24,6 +24,7 @@ import {
 } from '../domain/stageEvents';
 import type { Repository } from './repository';
 import { AUCTION_ROUTES, handleAuctionRoute } from './auctionRoutes';
+import { QUESTIONNAIRE_ROUTES, handleQuestionnaireRoute } from './questionnaireRoutes';
 import {
   applyExtension, describeWindow, extensionIssues, resolveTimelineRules,
   type ExtensionRequest, type TimelineRules,
@@ -91,6 +92,9 @@ export const ROUTES: RouteDoc[] = [
   // The auctions themselves — the mechanism, the roster and the two ledgers —
   // rather than the asks they hang off. See `api/auctionRoutes`.
   ...AUCTION_ROUTES,
+  // The questionnaire library, and what each ask asks from it. See
+  // `api/questionnaireRoutes`.
+  ...QUESTIONNAIRE_ROUTES,
   { method: 'POST', path: '/api/reset', summary: 'Back to the seed. Demonstration convenience.' },
 ];
 
@@ -407,6 +411,9 @@ export function createRouter({
     const auctionResponse = handleAuctionRoute(repository, request, segments);
     if (auctionResponse !== null) return auctionResponse;
 
+    const questionnaireResponse = handleQuestionnaireRoute(repository, request, segments, now);
+    if (questionnaireResponse !== null) return questionnaireResponse;
+
     if (collection === undefined) {
       if (method === 'GET') return ok({ routes: ROUTES });
       return notFound(`No route for ${method} ${request.path}.`);
@@ -423,6 +430,7 @@ export function createRouter({
           lineItems: state.lineItems.length,
           bidders: state.bidders.length,
           questionnaires: state.questionnaires.length,
+          questionnaireTemplates: state.questionnaireTemplates.length,
           auctions: state.auctions.length,
         },
       });

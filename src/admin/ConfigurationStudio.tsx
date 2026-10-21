@@ -15,15 +15,18 @@ import {
   Button, Chip, Field, NumberInput, Segmented, Select, Toggle,
 } from '../design-system/components/primitives';
 import { Card, Table, type Column } from '../design-system/components/layout';
-import { AgentCard, Drawer, Rail, ToggleCard, ValidationBanner } from '../design-system/components/domain';
-import { CONFIG_DOMAINS, SCOPE_LABELS, SCOPE_ORDER, TENANT_DEFAULTS, resolve } from '../domain/config';
+import { AgentCard, Drawer, ToggleCard, ValidationBanner } from '../design-system/components/domain';
+import { SCOPE_LABELS, SCOPE_ORDER, TENANT_DEFAULTS, resolve } from '../domain/config';
+import { CONTROL_ROOM } from '../domain/controlRoom';
+import { ProcureToPayConfiguration } from './ProcureToPay';
+import { Icon } from './AdminIcons';
 import {
   AGENT_HARD_LIMITS, ALL_AGENTS, AUTONOMY_LABELS, AUTONOMY_LEVELS, DEFAULT_MANDATE,
   checkMandate, effectiveAutonomy,
 } from '../domain/agents';
 import { simulate } from '../domain/doa';
-import { JourneyPatternsPanel, journeyCount } from './JourneyPatternsPanel';
-import { QuestionnairePanel, templateCount } from './QuestionnairePanel';
+import { JourneyPatternsPanel } from './JourneyPatternsPanel';
+import { QuestionnairePanel } from './QuestionnairePanel';
 import { useStore } from '../store/store';
 import { DOA_RULES, SCOPE_LINEAGE } from '../data/seed';
 import type { AutonomyLevel, ConfigScopeType, DoARule } from '../domain/types';
@@ -73,15 +76,92 @@ const SETTING_HINTS: Record<string, string> = {
   'award.regret_disclosure': 'What a regretted bidder is told about their position.',
   'counterparty.provisional_award_allowed': 'A provisional counterparty can bid; awarding one needs this on.',
   'agents.disclose_ai_scoring_to_suppliers': 'Suppliers are told when their response is AI-scored.',
+  'compare.basis': 'Whether bids rank on the quoted price or on landed cost with every component added.',
+  'event.side': 'Whether this tenant is buying or selling by default.',
+  'event.currency': 'The money every event is raised in, and the one the board totals in.',
+  'event.corrigendum_reopens_deadline': 'A corrigendum moves the closing date rather than leaving the time that was left.',
+  'event.gate_documents_on_acceptance': 'Tender documents are withheld until the invitation and NDA are accepted.',
+  'auction.min_decrement_type': 'Whether the minimum improvement is an absolute figure or a percentage.',
+  'negotiation.max_rounds': 'How many rounds of counter-offer a negotiation may run before it must close.',
+  'approval.sla_hours': 'How long an approver has before the request escalates.',
+};
+
+/**
+ * The scope a domain is normally authored at.
+ *
+ * Scalar settings are tuned per event, so the studio opens there. Questionnaire
+ * templates are not: they are written once for a category and reused, and a
+ * buyer who arrived at EVENT scope found a library where nothing could be
+ * edited or deleted, because nothing is authored at that scope. Switching
+ * domain moves the scope with it, and the selector stays free afterwards.
+ */
+const HOME_SCOPE: Record<string, ConfigScopeType> = {
+  // Questionnaire templates are written once for a category and reused, so the
+  // Form Builder opens where they are actually authored. Everything else is a
+  // tenant-wide decision until somebody overrides it narrower.
+  'form-builder': 'CATEGORY',
+  module: 'TENANT',
+  p2p: 'TENANT',
+  global: 'TENANT',
+};
+
+/**
+ * Which settings each module card opens.
+ *
+ * A module exists where a decision has more than one answer — a feedback policy
+ * is six values, not a switch — so the card opens the settings rather than
+ * pretending to be one of them. Journey patterns and the questionnaire library
+ * are panels of their own and are not in this table.
+ */
+const MODULE_KEYS: Record<string, string[]> = {
+  evaluation: DOMAIN_KEYS.evaluation,
+  auction: DOMAIN_KEYS.auction,
+  negotiation: DOMAIN_KEYS.negotiation,
+  award: DOMAIN_KEYS.award,
+  approval: DOMAIN_KEYS.approval,
+  compare: ['compare.basis'],
+  global: ['event.side', 'event.currency', 'event.corrigendum_reopens_deadline', 'event.gate_documents_on_acceptance'],
+};
+
+/**
+ * Every module a plugin card may open.
+ *
+ * Exported so the catalogue can be checked against it: a card pointing at a
+ * module nobody renders is a View Module button that opens a blank page, and
+ * nothing else in the type system would catch it. `unavailable` is the one
+ * deliberate non-target — those cards show a chip instead of a button.
+ */
+export const HANDLED_MODULES = [
+  'patterns', 'questionnaire', 'module', 'unavailable',
+  ...Object.keys(MODULE_KEYS),
+];
+
+const MODULE_TITLES: Record<string, string> = {
+  patterns: 'Journey Patterns',
+  questionnaire: 'Questionnaire Library',
+  module: 'Module Enablement',
+  evaluation: 'Evaluation Model',
+  auction: 'Auction Rules',
+  negotiation: 'Negotiation Rounds',
+  award: 'Award & Regret',
+  approval: 'Approval SLA',
+  compare: 'Comparison Basis',
+  global: 'Tenant Defaults',
 };
 
 export function ConfigurationStudio() {
   const { state, dispatch } = useStore();
-  const [domain, setDomain] = React.useState('auction');
-  const [scope, setScope] = React.useState<ConfigScopeType>('EVENT');
+  const [area, setArea] = React.useState('p2p');
+  const [module, setModule] = React.useState<string | null>(null);
+  const [scope, setScope] = React.useState<ConfigScopeType>('TENANT');
   const [chainKey, setChainKey] = React.useState<string | null>(null);
 
-  const keys = DOMAIN_KEYS[domain] ?? [];
+  const openArea = (next: string) => {
+    setArea(next);
+    setModule(null);
+    const home = HOME_SCOPE[next];
+    if (home !== undefined) setScope(home);
+  };
 
   const lineage = {
     tenantId: SCOPE_LINEAGE.tenantId,
@@ -89,10 +169,6 @@ export function ConfigurationStudio() {
     templateId: scope === 'TENANT' || scope === 'CATEGORY' ? null : SCOPE_LINEAGE.templateId,
     eventId: scope === 'EVENT' ? SCOPE_LINEAGE.eventId : null,
   };
-
-  const resolved = keys.map((key) =>
-    resolve(key, state.configSettings, lineage, TENANT_DEFAULTS[key]),
-  );
 
   const chainSetting = chainKey
     ? resolve(chainKey, state.configSettings, lineage, TENANT_DEFAULTS[chainKey])
@@ -113,29 +189,121 @@ export function ConfigurationStudio() {
     });
   };
 
+  /** A list of scalar settings, as every configuration pane renders them. */
+  const settingList = (keys: string[]) => (
+    <div className="rfx-stack" style={{ gap: 10 }}>
+      {keys.map((key) => {
+        const setting = resolve(key, state.configSettings, lineage, TENANT_DEFAULTS[key]);
+        // A value locked at a broader scope is read-only here.
+        const editableHere =
+          !setting.isLocked ||
+          SCOPE_ORDER.indexOf(setting.lockedBy ?? 'TENANT') >= SCOPE_ORDER.indexOf(scope);
+        return (
+          <ToggleCard
+            key={key}
+            title={key}
+            description={SETTING_HINTS[key]}
+            resolvedFrom={SCOPE_LABELS[setting.resolvedFrom]}
+            isLocked={setting.isLocked}
+            lockedBy={setting.lockedBy ? SCOPE_LABELS[setting.lockedBy] : null}
+            onViewChain={() => setChainKey(key)}
+          >
+            <SettingControl
+              value={setting.value}
+              disabled={!editableHere}
+              onChange={(next) => setValue(key, next)}
+              settingKey={key}
+            />
+          </ToggleCard>
+        );
+      })}
+    </div>
+  );
+
+  const modulePane = (name: string) => {
+    if (name === 'patterns' || name === 'module') {
+      return <JourneyPatternsPanel scope={scope} lineage={lineage} />;
+    }
+    if (name === 'questionnaire') return <QuestionnairePanel scope={scope} lineage={lineage} />;
+    const keys = MODULE_KEYS[name];
+    if (keys === undefined || keys.length === 0) {
+      return <NotInThisBuild label={MODULE_TITLES[name] ?? name} blurb="" />;
+    }
+    return settingList(keys);
+  };
+
+  const entry = CONTROL_ROOM.find((each) => each.id === area) ?? CONTROL_ROOM[0];
+
   return (
     <div className="rfx-nav">
-      <Rail
-        title="Domains"
-        activeId={domain}
-        onSelect={setDomain}
-        items={CONFIG_DOMAINS.map((d) => {
-          // Journey patterns are not scalar settings, so the badge counts the
-          // journeys visible at this scope rather than the keys in the domain.
-          const count = d.key === 'patterns'
-            ? journeyCount(state.configSettings, lineage)
-            : d.key === 'questionnaire'
-              ? templateCount(state.configSettings, lineage)
-              : (DOMAIN_KEYS[d.key]?.length ?? 0);
-          return {
-            id: d.key,
-            label: d.label,
-            badge: count > 0 ? <Chip tone="neutral">{count}</Chip> : undefined,
-          };
+      <nav
+        aria-label="Control Room"
+        style={{
+          background: color.surface, border: `1px solid ${color.border}`,
+          borderRadius: radius.card, overflow: 'hidden', alignSelf: 'start',
+        }}
+      >
+        <div
+          style={{
+            fontSize: 11, fontWeight: 700, letterSpacing: '.04em', textTransform: 'uppercase',
+            color: color.textSecondary, padding: '11px 13px',
+            borderBottom: `1px solid ${color.border}`,
+          }}
+        >
+          Control Room
+        </div>
+        {CONTROL_ROOM.map((item) => {
+          const active = item.id === area;
+          return (
+            <button
+              key={item.id}
+              type="button"
+              className="rfx-navrow"
+              onClick={() => openArea(item.id)}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 9, width: '100%', textAlign: 'left',
+                border: 'none', cursor: 'pointer', padding: '9px 13px',
+                background: active ? color.brandPrimarySoft : 'transparent',
+                borderLeft: `3px solid ${active ? color.brandPrimary : 'transparent'}`,
+                color: active ? color.brandPrimary : color.textBody,
+              }}
+            >
+              <span aria-hidden style={{ display: 'inline-flex', opacity: item.built ? 1 : 0.55 }}>
+                <Icon name={item.icon} size={15} />
+              </span>
+              <span
+                style={{
+                  fontSize: 12.5, fontWeight: active ? 600 : 400,
+                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                  opacity: item.built ? 1 : 0.6,
+                }}
+              >
+                {item.label}
+              </span>
+            </button>
+          );
         })}
-      />
+      </nav>
 
       <div className="rfx-stack" style={{ gap: 14 }}>
+        <div>
+          <h1 style={{ margin: 0, fontSize: 21, fontWeight: 700 }}>
+            {module === null ? entry.label : MODULE_TITLES[module] ?? module}
+          </h1>
+          {module !== null && (
+            <button
+              type="button"
+              onClick={() => setModule(null)}
+              style={{
+                border: 'none', background: 'none', padding: 0, marginTop: 5, cursor: 'pointer',
+                color: color.brandPrimary, fontSize: 12, fontWeight: 600,
+              }}
+            >
+              ‹ Back to {entry.label}
+            </button>
+          )}
+        </div>
+
         {/* The scope selector — the point of this screen. */}
         <Card
           title="Configuration scope"
@@ -175,54 +343,20 @@ export function ConfigurationStudio() {
           </div>
         </Card>
 
-        {domain === 'patterns' ? (
-          <JourneyPatternsPanel scope={scope} lineage={lineage} />
-        ) : domain === 'questionnaire' ? (
-          <QuestionnairePanel scope={scope} lineage={lineage} />
-        ) : keys.length === 0 ? (
-          <Card>
-            <div style={{ padding: '28px 8px', textAlign: 'center' }}>
-              <div aria-hidden style={{ fontSize: 24 }}>⚙</div>
-              <div style={{ fontSize: 13.5, fontWeight: 600, marginTop: 8 }}>
-                {CONFIG_DOMAINS.find((d) => d.key === domain)?.label}
-              </div>
-              <div style={{ fontSize: 12, color: color.textSecondary, marginTop: 6, maxWidth: 420, marginInline: 'auto', lineHeight: 1.6 }}>
-                This domain has no scalar settings wired in this build. The domains with settings —
-                event defaults, evaluation, auction, negotiation, award, approval, counterparty and
-                agents — demonstrate the resolution model end to end. Journey patterns and
-                questionnaire demonstrate it over collections rather than scalars.
-              </div>
-            </div>
-          </Card>
-        ) : (
-          <div className="rfx-stack" style={{ gap: 10 }}>
-            {resolved.map((setting) => {
-              // A value locked at a broader scope is read-only here.
-              const editableHere =
-                !setting.isLocked ||
-                SCOPE_ORDER.indexOf(setting.lockedBy ?? 'TENANT') >= SCOPE_ORDER.indexOf(scope);
-
-              return (
-                <ToggleCard
-                  key={setting.key}
-                  title={setting.key}
-                  description={SETTING_HINTS[setting.key]}
-                  resolvedFrom={SCOPE_LABELS[setting.resolvedFrom]}
-                  isLocked={setting.isLocked}
-                  lockedBy={setting.lockedBy ? SCOPE_LABELS[setting.lockedBy] : null}
-                  onViewChain={() => setChainKey(setting.key)}
-                >
-                  <SettingControl
-                    value={setting.value}
-                    disabled={!editableHere}
-                    onChange={(next) => setValue(setting.key, next)}
-                    settingKey={setting.key}
-                  />
-                </ToggleCard>
-              );
-            })}
-          </div>
-        )}
+        {module !== null ? modulePane(module)
+          : area === 'p2p' ? (
+            <ProcureToPayConfiguration
+              scope={scope}
+              lineage={lineage}
+              onOpenModule={setModule}
+            />
+          )
+          : area === 'policies' ? <DoaAndAgents />
+          : area === 'form-builder' ? <QuestionnairePanel scope={scope} lineage={lineage} />
+          : area === 'module' ? <JourneyPatternsPanel scope={scope} lineage={lineage} />
+          : area === 'access' ? <DoaAndAgents />
+          : area === 'global' ? settingList(MODULE_KEYS.global)
+          : <NotInThisBuild label={entry.label} blurb={entry.blurb} />}
       </div>
 
       <Drawer
@@ -280,6 +414,46 @@ export function ConfigurationStudio() {
   );
 }
 
+/**
+ * An area of the Control Room this build does not implement.
+ *
+ * Says what would be here rather than showing an empty page. A rail that
+ * silently dropped these would read as "this product has no travel
+ * configuration", which is a different and wrong claim.
+ */
+function NotInThisBuild({ label, blurb }: { label: string; blurb: string }) {
+  return (
+    <Card>
+      <div style={{ padding: '34px 20px', textAlign: 'center' }}>
+        <div aria-hidden style={{ color: color.textMuted, display: 'inline-flex' }}>
+          <Icon name="gear" size={26} />
+        </div>
+        <div style={{ fontSize: 14, fontWeight: 600, marginTop: 10 }}>{label}</div>
+        {blurb && (
+          <div
+            style={{
+              fontSize: 12.5, color: color.textSecondary, marginTop: 8, lineHeight: 1.65,
+              maxWidth: 460, marginInline: 'auto',
+            }}
+          >
+            {blurb}
+          </div>
+        )}
+        <div
+          style={{
+            fontSize: 11.5, color: color.textMuted, marginTop: 12, lineHeight: 1.6,
+            maxWidth: 460, marginInline: 'auto',
+          }}
+        >
+          This module is part of the suite but not of this build. It is listed so the configuration
+          surface is the product's rather than this prototype's — sourcing configuration lives under
+          <strong> Procure to Pay Configuration → RFX</strong>.
+        </div>
+      </div>
+    </Card>
+  );
+}
+
 function SettingControl({
   value, disabled, onChange, settingKey,
 }: { value: unknown; disabled: boolean; onChange: (next: unknown) => void; settingKey: string }) {
@@ -316,6 +490,9 @@ function SettingControl({
     'auction.below_min_policy': ['BLOCK', 'WARN_AND_JUSTIFY', 'ALLOW'],
     'award.regret_disclosure': ['NONE', 'RANK_ONLY', 'RANK_AND_GAP', 'FULL'],
     'award.po_handoff': ['INTERNAL', 'ERP_HANDOFF', 'HYBRID'],
+    'compare.basis': ['QUOTED', 'LANDED'],
+    'event.side': ['BUY', 'SELL'],
+    'auction.min_decrement_type': ['ABSOLUTE', 'PCT'],
   };
 
   const list = options[settingKey];

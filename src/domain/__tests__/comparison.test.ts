@@ -38,6 +38,7 @@ function bidder(id: string, counterpartyId: string, over: Partial<EventBidder> =
     invitationStatus: 'SENT', declineReason: null, ndaAcceptedAt: null,
     participationStatus: 'SUBMITTED', qualificationStatus: 'PENDING', awardStatus: 'NONE',
     qualificationSnapshot: 0, performanceRatingSnapshot: 0, bidOnBehalfAllowed: false,
+    categories: [],
     maskedLabel: `Bidder ${id.slice(-1).toUpperCase()}`, disqualified: false,
     disqualificationReason: null,
     ...over,
@@ -55,6 +56,7 @@ function lot(id: string, name: string): Lot {
 
 function line(id: string, over: Partial<LineItem> = {}): LineItem {
   return {
+    category: 'Indirect', superCategory: null,
     id, lotId: 'lot-1', lineNumber: 1, itemCode: 'X-1', description: 'A thing',
     specification: '', quantity: 10, uom: 'each', deliveryLocation: '', deliveryDate: null,
     incoterm: null, taxClass: 'STANDARD', baselinePrice: 100, baselineSource: 'BUDGET',

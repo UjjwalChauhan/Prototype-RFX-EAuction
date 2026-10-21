@@ -105,7 +105,12 @@ export function useSync(role: SyncRole): SyncStatus {
         lineItems: state.lineItems,
         termsDocuments: state.termsDocuments,
         bidders: state.bidders,
-        questionnaires: state.questionnaires,
+        // The library template an ask was built from is buyer-side provenance —
+        // it decides whether that template can leave the library, and it means
+        // nothing to a supplier. It stays off the wire.
+        questionnaires: state.questionnaires.map(
+          ({ sourceTemplateId: _sourceTemplateId, ...rest }) => rest,
+        ),
         // An auction is published by the buyer and read by the supplier. Its
         // roster and lot details are not sent: they are already on the wire as
         // `bidders` and `lots`.

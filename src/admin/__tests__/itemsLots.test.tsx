@@ -89,6 +89,7 @@ describe('an event created in the wizard brings its lines with it', () => {
     status: 'LOT_PENDING',
   };
   const line: LineItem = {
+    category: 'Indirect', superCategory: null,
     id: `${eventId}-li-1`, lotId: lot.id, lineNumber: 1, itemCode: 'WID-1',
     description: 'A widget', specification: '', quantity: 4, uom: 'each',
     deliveryLocation: 'Dubai DC', deliveryDate: null, incoterm: null, taxClass: null,

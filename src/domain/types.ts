@@ -266,6 +266,18 @@ export interface LineItem {
   currency: string;
   isOptional: boolean;
   allowAlternate: boolean;
+  /**
+   * The spend category this line was requisitioned under.
+   *
+   * On the basket rather than only on the event, because a consolidated event
+   * routinely spans several: the shortlist is already built per category so a
+   * laptop supplier is not asked to price hydraulic pumps, and the
+   * questionnaire is chosen the same way. Falls back to the event's category
+   * for a line that was never classified.
+   */
+  category: string;
+  /** The parent category in the spend taxonomy, where the line carries one. */
+  superCategory: string | null;
   /** Traceability: PR line -> event line -> bid -> award line -> PO line. */
   sourcePrLineId: Id | null;
 }
@@ -312,6 +324,15 @@ export interface EventBidder {
   qualificationSnapshot: number;
   performanceRatingSnapshot: number;
   bidOnBehalfAllowed: boolean;
+  /**
+   * The categories of this event they were shortlisted under.
+   *
+   * One supplier shortlisted under two categories is still one invitation, so
+   * this is a list. Empty means the whole basket — the ordinary case for an
+   * event that spans a single category, and the only safe reading of a roster
+   * built before categories were recorded.
+   */
+  categories: string[];
   /** "Bidder A" — used under MASKED identity policy and blind technical. */
   maskedLabel: string;
   disqualified: boolean;
@@ -418,6 +439,27 @@ export interface Questionnaire {
   stage: Stage;
   name: string;
   questions: Question[];
+  /**
+   * The library template this questionnaire was instantiated from, recorded at
+   * publish and never read back for content.
+   *
+   * The questions themselves are a copy — editing an event never reaches the
+   * library, and that stays true. This is provenance only, and it exists for
+   * one reason: the library cannot tell whether a template is safe to delete
+   * without knowing which events were built from it. Null for a questionnaire
+   * started blank, and absent on anything published before the link existed.
+   */
+  sourceTemplateId?: Id | null;
+  /**
+   * The category this questionnaire asks for.
+   *
+   * An event that buys laptops and cleaning services asks each market its own
+   * questions, so one ask can carry several questionnaires — one per category
+   * in the basket, each drawn from that category's library. Null means the
+   * questionnaire covers the whole ask, which is what a single-category event
+   * produces and what every questionnaire written before this was split.
+   */
+  category?: string | null;
 }
 
 // ---------------------------------------------------------------------------

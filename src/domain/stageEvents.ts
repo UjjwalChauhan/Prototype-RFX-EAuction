@@ -164,6 +164,13 @@ export interface QuestionnaireInput {
   point: VendorInputPoint;
   name?: string;
   questions: QuestionInput[];
+  /** The library template this was started from, for provenance only. */
+  sourceTemplateId?: Id | null;
+  /**
+   * The category this questionnaire asks for. Omit it on an event that spans
+   * one category; give it once per category on an event that spans several.
+   */
+  category?: string | null;
 }
 
 /**
@@ -427,12 +434,21 @@ export function validateSourcingEventInput(
     }
   }
 
+  // One questionnaire per point *per category*: an event spanning two
+  // categories asks each market its own questions at the same point, and that
+  // is two questionnaires, not a collision.
   const points = new Set<string>();
   (input.questionnaires ?? []).forEach((questionnaire, i) => {
-    if (points.has(questionnaire.point)) {
-      say(`questionnaires[${i}].point`, `Two questionnaires are given for ${questionnaire.point}.`);
+    const key = `${questionnaire.point}::${questionnaire.category ?? ''}`;
+    if (points.has(key)) {
+      say(
+        `questionnaires[${i}].point`,
+        questionnaire.category
+          ? `Two questionnaires are given for ${questionnaire.point} in ${questionnaire.category}.`
+          : `Two questionnaires are given for ${questionnaire.point}.`,
+      );
     }
-    points.add(questionnaire.point);
+    points.add(key);
     if (pattern && !pattern.vendorInputPoints.includes(questionnaire.point)) {
       say(
         `questionnaires[${i}].point`,
@@ -555,7 +571,7 @@ function buildLots(
 }
 
 function buildLineItems(
-  lines: EventLineInput[], lots: Lot[], eventId: Id, currency: string,
+  lines: EventLineInput[], lots: Lot[], eventId: Id, currency: string, category: string,
 ): LineItem[] {
   const lotIdByName = new Map(lots.map((lot) => [lot.name, lot.id]));
   return lines.map((line, i) => ({
@@ -581,12 +597,31 @@ function buildLineItems(
     currency,
     isOptional: line.isOptional ?? false,
     allowAlternate: line.allowAlternate ?? false,
+    // An unclassified line belongs to the event's own category rather than to
+    // none: a line with no category would fall out of every per-category
+    // shortlist and every per-category questionnaire, and go silently unasked.
+    category: isBlank(line.category) ? category : line.category as string,
+    superCategory: line.superCategory ?? null,
     sourcePrLineId: line.sourcePrLineId ?? null,
   }));
 }
 
 export function basketValue(lines: EventLineInput[]): number {
   return lines.reduce((total, line) => total + (line.baselinePrice ?? 0) * line.quantity, 0);
+}
+
+/**
+ * Every category one supplier appears under in a shortlist.
+ *
+ * The wizard builds the shortlist per category, so the same supplier can be
+ * listed twice. They are one invitation holding both categories, not two.
+ */
+function categoriesOfBidder(shortlist: BidderInput[], counterpartyId: Id): string[] {
+  return Array.from(new Set(
+    shortlist
+      .filter((b) => b.counterpartyId === counterpartyId && !isBlank(b.category))
+      .map((b) => b.category as string),
+  ));
 }
 
 /** The invitations that put one ask in front of its shortlist. */
@@ -616,21 +651,39 @@ function buildBidders(
     qualificationSnapshot: bidder.qualificationSnapshot ?? 0,
     performanceRatingSnapshot: bidder.performanceRatingSnapshot ?? 0,
     bidOnBehalfAllowed: bidder.bidOnBehalfAllowed ?? false,
+    categories: categoriesOfBidder(shortlist, bidder.counterpartyId),
     maskedLabel: `Bidder ${String.fromCharCode(65 + i)}`,
     disqualified: false,
     disqualificationReason: null,
   }));
 }
 
+/**
+ * A questionnaire id that stays unique when an ask carries several.
+ *
+ * The id used to be `<event>-qn-<stage>`, which was exactly one per stage. An
+ * event spanning two categories asks twice at the same stage, so the category
+ * joins the key — slugged, because an id that contains a display string is an
+ * id that breaks when somebody renames a category with a slash in it.
+ */
+export function questionnaireIdFor(eventId: Id, stage: Stage, category?: string | null): Id {
+  const base = `${eventId}-qn-${stage.toLowerCase()}`;
+  if (category === undefined || category === null || category.trim() === '') return base;
+  const slug = category.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+  return `${base}-${slug || 'category'}`;
+}
+
 function buildQuestionnaire(
   questionnaire: QuestionnaireInput, eventId: Id, stage: Stage,
 ): Questionnaire {
-  const questionnaireId = `${eventId}-qn-${stage.toLowerCase()}`;
+  const questionnaireId = questionnaireIdFor(eventId, stage, questionnaire.category);
   return {
     id: questionnaireId,
     eventId,
     stage,
     name: questionnaire.name ?? `${STAGE_LABELS[stage]} questionnaire`,
+    sourceTemplateId: questionnaire.sourceTemplateId ?? null,
+    category: questionnaire.category ?? null,
     questions: questionnaire.questions
       .slice()
       .sort((a, b) => a.sequence - b.sequence)
@@ -715,7 +768,7 @@ export function createSourcingEvent(
     ?? windows[windows.length - 1]
     ?? null;
   const lots = buildLots(input.lines, eventId, biddingWindow);
-  const lineItems = buildLineItems(input.lines, lots, eventId, resolved.currency);
+  const lineItems = buildLineItems(input.lines, lots, eventId, resolved.currency, input.category!);
 
   const takeNumber = (prefix: string) => {
     const number = nextEventNumber(taken, prefix, year);
@@ -760,8 +813,10 @@ export function createSourcingEvent(
   };
 
   const shortlist = input.bidders ?? [];
-  const questionnaireOf = (stage: Stage) =>
-    (input.questionnaires ?? []).find((q) => q.point === stage);
+  // Every questionnaire asked at a point — one per category on a consolidated
+  // event, one in total on an ordinary one.
+  const questionnairesOf = (stage: VendorInputPoint) =>
+    (input.questionnaires ?? []).filter((q) => q.point === stage && q.questions.length > 0);
 
   const stageEvents: SourcingEvent[] = [];
   const bidders: EventBidder[] = [];
@@ -798,8 +853,7 @@ export function createSourcingEvent(
 
     bidders.push(...buildBidders(shortlist, stageId, window.opensAt, issued));
 
-    const asked = questionnaireOf(stage);
-    if (asked && asked.questions.length > 0) {
+    for (const asked of questionnairesOf(stage)) {
       questionnaires.push(buildQuestionnaire(asked, stageId, stage));
     }
   });
@@ -810,8 +864,7 @@ export function createSourcingEvent(
   if (stageEvents.length === 0) {
     bidders.push(...buildBidders(shortlist, eventId, opensAt, resolved.publish));
     for (const point of pattern.vendorInputPoints) {
-      const asked = questionnaireOf(point);
-      if (asked && asked.questions.length > 0) {
+      for (const asked of questionnairesOf(point)) {
         questionnaires.push(buildQuestionnaire(asked, eventId, point as Stage));
       }
     }

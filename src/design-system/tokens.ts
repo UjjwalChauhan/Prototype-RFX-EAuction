@@ -1,7 +1,10 @@
 /**
  * Design tokens — Pack 00, Foundation file 1 of 3.
  *
- * Values are lifted verbatim from "Foundation — Tokens & Primitives.dc.html".
+ * Values follow the Buyer Portal reference: a violet primary on a near-white
+ * ground, 4px controls, Inter throughout. Changing them here moves every
+ * screen at once, which is the only reason a token file is worth having.
+ *
  * Colour is never the only carrier of meaning: status is always colour + icon
  * + text, which is why every status map in the domain layer ships an icon.
  */
@@ -10,37 +13,45 @@ import { BASE_CURRENCY } from '../domain/config';
 export { BASE_CURRENCY };
 
 export const color = {
-  brandPrimary: '#2563EB',
-  brandPrimarySoft: '#EFF4FF',
+  brandPrimary: '#6C5DD3',
+  /** The pressed/hover step of the primary. */
+  brandPrimaryStrong: '#5B4CC4',
+  brandPrimarySoft: '#F1EFFC',
+  /** The border that sits on `brandPrimarySoft`. */
+  brandPrimaryTint: '#E4E0FA',
   surface: '#FFFFFF',
-  surfacePage: '#F7F8FA',
-  border: '#E5E7EB',
-  borderStrong: '#D1D5DB',
-  textPrimary: '#111827',
-  textSecondary: '#6B7280',
-  textMuted: '#9CA3AF',
-  textBody: '#374151',
-  success: '#16A34A',
-  successSoft: '#DCFCE7',
-  successText: '#15803D',
-  warning: '#F59E0B',
-  warningSoft: '#FEF3C7',
-  warningText: '#B45309',
-  danger: '#DC2626',
-  dangerSoft: '#FEE2E2',
-  dangerText: '#B91C1C',
-  info: '#0EA5E9',
-  infoSoft: '#E0F2FE',
-  infoText: '#0369A1',
-  accentPurple: '#7C3AED',
-  accentPurpleSoft: '#F3E8FF',
-  accentPurpleText: '#6D28D9',
-  gold: '#D97706',
-  neutralSoft: '#F1F2F4',
+  surfacePage: '#FBFBFD',
+  /** Zebra striping and inset panels. */
+  rowAlt: '#F7F7FA',
+  border: '#E7E7EE',
+  borderStrong: '#CFCBDD',
+  textPrimary: '#1D1D22',
+  textSecondary: '#6E6E7A',
+  textMuted: '#9A9AA6',
+  textBody: '#33333B',
+  /** Near-black, for the one dark control on a screen. */
+  ink: '#141416',
+  success: '#2F9E62',
+  successSoft: '#E6F6EE',
+  successText: '#227A4A',
+  warning: '#F2A84E',
+  warningSoft: '#FFF6E0',
+  warningText: '#8A6100',
+  danger: '#E5484D',
+  dangerSoft: '#FDECEC',
+  dangerText: '#C13238',
+  info: '#2563EB',
+  infoSoft: '#EAF1FE',
+  infoText: '#1D4FD8',
+  accentPurple: '#7B5BA8',
+  accentPurpleSoft: '#EFEAF7',
+  accentPurpleText: '#60468A',
+  gold: '#B7791F',
+  neutralSoft: '#F1F1F4',
 } as const;
 
 export const font = {
-  sans: '"Helvetica Neue", Helvetica, Arial, sans-serif',
+  sans: 'Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
   mono: 'ui-monospace, "SF Mono", Menlo, monospace',
 } as const;
 
@@ -58,8 +69,10 @@ export const type = {
 } as const;
 
 export const radius = {
-  card: 8,
-  control: 6,
+  card: 6,
+  control: 4,
+  /** Nav rows and other soft-cornered strips. */
+  nav: 5,
   pill: 999,
 } as const;
 

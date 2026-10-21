@@ -21,22 +21,22 @@ import type {
 } from './types';
 
 export const PR_STATUS_PRESENTATION: Record<PrStatus, StatusPresentation> = {
-  DRAFT: { label: 'Draft', icon: '○', fg: '#374151', bg: '#F1F2F4' },
-  PENDING: { label: 'Pending', icon: '◐', fg: '#6D28D9', bg: '#F3E8FF' },
-  APPROVAL: { label: 'Approval', icon: '◑', fg: '#6D28D9', bg: '#F3E8FF' },
-  APPROVED: { label: 'Approved', icon: '✓', fg: '#15803D', bg: '#DCFCE7' },
-  SOURCING: { label: 'Sourcing', icon: '●', fg: '#0369A1', bg: '#E0F2FE' },
-  PARTIALLY_SOURCED: { label: 'Partially Sourced', icon: '◧', fg: '#B45309', bg: '#FEF3C7' },
-  CLOSED: { label: 'Closed', icon: '✓', fg: '#374151', bg: '#F1F2F4' },
-  REJECTED: { label: 'Rejected', icon: '✕', fg: '#B91C1C', bg: '#FEE2E2' },
+  DRAFT: { label: 'Draft', icon: '○', fg: '#33333B', bg: '#F1F1F4' },
+  PENDING: { label: 'Pending', icon: '◐', fg: '#60468A', bg: '#EFEAF7' },
+  APPROVAL: { label: 'Approval', icon: '◑', fg: '#60468A', bg: '#EFEAF7' },
+  APPROVED: { label: 'Approved', icon: '✓', fg: '#227A4A', bg: '#E6F6EE' },
+  SOURCING: { label: 'Sourcing', icon: '●', fg: '#1D4FD8', bg: '#EAF1FE' },
+  PARTIALLY_SOURCED: { label: 'Partially Sourced', icon: '◧', fg: '#8A6100', bg: '#FFF6E0' },
+  CLOSED: { label: 'Closed', icon: '✓', fg: '#33333B', bg: '#F1F1F4' },
+  REJECTED: { label: 'Rejected', icon: '✕', fg: '#C13238', bg: '#FDECEC' },
 };
 
 export const SOURCING_STATE_PRESENTATION: Record<PrLineSourcingState, StatusPresentation> = {
-  UNSOURCED: { label: 'Unsourced', icon: '○', fg: '#B45309', bg: '#FEF3C7' },
-  IN_EVENT: { label: 'In event', icon: '●', fg: '#0369A1', bg: '#E0F2FE' },
-  AWARDED: { label: 'Awarded', icon: '✓', fg: '#15803D', bg: '#DCFCE7' },
-  ON_CONTRACT: { label: 'On contract', icon: '▣', fg: '#374151', bg: '#F1F2F4' },
-  CANCELLED: { label: 'Cancelled', icon: '✕', fg: '#B91C1C', bg: '#FEE2E2' },
+  UNSOURCED: { label: 'Unsourced', icon: '○', fg: '#8A6100', bg: '#FFF6E0' },
+  IN_EVENT: { label: 'In event', icon: '●', fg: '#1D4FD8', bg: '#EAF1FE' },
+  AWARDED: { label: 'Awarded', icon: '✓', fg: '#227A4A', bg: '#E6F6EE' },
+  ON_CONTRACT: { label: 'On contract', icon: '▣', fg: '#33333B', bg: '#F1F1F4' },
+  CANCELLED: { label: 'Cancelled', icon: '✕', fg: '#C13238', bg: '#FDECEC' },
 };
 
 // ---------------------------------------------------------------------------

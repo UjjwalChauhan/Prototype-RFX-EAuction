@@ -18,7 +18,7 @@ import { resolveAccumulated } from '../domain/config';
 import { QUESTION_TYPES_BY_GROUP, typeLabel } from '../domain/questionTypes';
 import {
   POINT_PURPOSE, PRICED_QUESTION_TYPES, TEMPLATE_CUSTOM_KEY, addDraftQuestion,
-  blankQuestionnaire, draftAsTemplate, instantiateTemplate, isScored, moveDraftQuestion,
+  blankQuestionnaire, categorySlug, draftAsTemplate, instantiateTemplate, isScored, moveDraftQuestion,
   normalise, pointLabel, removeDraftQuestion, removeDraftSection, renameDraftSection,
   addDraftSection, seedQuestionnaires, setDraftScored, setDraftType, templateWeight,
   templatesFor, validateTemplate, type DraftQuestionnaire,
@@ -484,6 +484,8 @@ export function CreateEventWizard({
       .map((q) => ({
         point: q.point,
         name: q.templateName,
+        category: q.category,
+        sourceTemplateId: q.templateId,
         questions: q.questions.slice().sort((a, b) => a.sequence - b.sequence).map((question) => ({
           sectionId: question.sectionId,
           sequence: question.sequence,
@@ -592,7 +594,7 @@ export function CreateEventWizard({
                 draft={draft}
                 patch={patch}
                 points={questionnairePoints}
-                category={draft.category}
+                categories={lineCategories.map((g) => g.category)}
               />
             )}
             {stepName === 'Terms' && (
@@ -1300,30 +1302,54 @@ function BidderRow({
  * the library's own rules say what that means at this point in the journey.
  */
 export function QuestionnaireStep({
-  draft, patch, points, category,
+  draft, patch, points, categories,
 }: {
   draft: Draft;
   patch: (p: Partial<Draft>) => void;
   points: VendorInputPoint[];
-  category: string;
+  /** The categories the basket spans, widest first. */
+  categories: string[];
 }) {
   const { state } = useStore();
   const [activePoint, setActivePoint] = React.useState<VendorInputPoint>(points[0] ?? 'RFI');
+  const [activeCategory, setActiveCategory] = React.useState<string | null>(null);
 
-  // Templates accumulate down the scope chain, so a category library adds to
-  // the tenant one rather than hiding it.
-  const library = React.useMemo(
-    () =>
-      resolveAccumulated<QuestionnaireTemplate>(TEMPLATE_CUSTOM_KEY, state.configSettings, {
-        tenantId: SCOPE_LINEAGE.tenantId,
-        categoryId: category,
-        templateId: null,
-        eventId: null,
-      }).items,
-    [state.configSettings, category],
-  );
+  // No categories given means the caller is not splitting by category at all,
+  // which is one questionnaire covering the whole ask — not one stamped with
+  // the event header's category, which would quietly claim a split it has not
+  // made and leave every already-shaped questionnaire unmatched.
+  const spans: (string | null)[] = categories.length === 0 ? [null] : categories;
+
+  /**
+   * The library, resolved once per category the basket spans.
+   *
+   * Templates accumulate down the scope chain, so a category library adds to
+   * the tenant one rather than hiding it — and a consolidated event has to walk
+   * the chain once per category, because "the category library" is a different
+   * library for each. Deduplicated by id: the tenant templates are reached from
+   * every branch and would otherwise be offered once per category.
+   */
+  const library = React.useMemo(() => {
+    const byId = new Map<string, QuestionnaireTemplate>();
+    for (const forCategory of spans) {
+      const resolved = resolveAccumulated<QuestionnaireTemplate>(
+        TEMPLATE_CUSTOM_KEY, state.configSettings,
+        {
+          tenantId: SCOPE_LINEAGE.tenantId,
+          categoryId: forCategory,
+          templateId: null,
+          eventId: null,
+        },
+      ).items;
+      for (const template of resolved) byId.set(template.id, template);
+    }
+    return Array.from(byId.values());
+  }, [state.configSettings, spans.join('\u0000')]);
 
   const point = points.includes(activePoint) ? activePoint : points[0];
+  const category = activeCategory !== null && spans.includes(activeCategory)
+    ? activeCategory
+    : spans[0] ?? null;
   const options = React.useMemo(
     () => (point ? templatesFor(library, point, category) : []),
     [library, point, category],
@@ -1331,14 +1357,19 @@ export function QuestionnaireStep({
 
   const write = (next: DraftQuestionnaire) =>
     patch({
-      questionnaires: [...draft.questionnaires.filter((q) => q.point !== next.point), next],
+      questionnaires: [
+        ...draft.questionnaires.filter(
+          (q) => !(q.point === next.point && q.category === next.category),
+        ),
+        next,
+      ],
     });
 
   // Every point the journey asks at starts from the library template that
   // applies there, so the buyer edits a real questionnaire rather than filling
   // a blank page. Points already shaped are left exactly as they are.
   const seeded = seedQuestionnaires({
-    existing: draft.questionnaires, points, library, category, idSeed: 'draft',
+    existing: draft.questionnaires, points, library, categories: spans, idSeed: 'draft',
   });
   React.useEffect(() => {
     if (seeded.length !== draft.questionnaires.length
@@ -1347,7 +1378,7 @@ export function QuestionnaireStep({
     }
   });
 
-  const current = seeded.find((q) => q.point === point) ?? null;
+  const current = seeded.find((q) => q.point === point && q.category === category) ?? null;
 
   if (!point) {
     return (
@@ -1400,10 +1431,34 @@ export function QuestionnaireStep({
             value={point}
             onChange={setActivePoint}
             options={points.map((p) => {
-              const q = draft.questionnaires.find((x) => x.point === p);
+              const asked = draft.questionnaires.filter((x) => x.point === p);
+              const total = asked.reduce((sum, q) => sum + q.questions.length, 0);
               return {
                 value: p,
-                label: q ? `${pointLabel(p)} · ${q.questions.length}` : pointLabel(p),
+                label: asked.length === 0 ? pointLabel(p) : `${pointLabel(p)} · ${total}`,
+              };
+            })}
+          />
+        </div>
+      )}
+
+      {spans.length > 1 && (
+        <div>
+          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>Asked for</div>
+          <div style={{ fontSize: 11.5, color: color.textSecondary, marginBottom: 8 }}>
+            This event buys in {spans.length} categories, so it asks {spans.length} sets of
+            questions at each point. A questionnaire is drawn from its own category's library and
+            goes only to the suppliers shortlisted for that category — a pallet supplier is not
+            asked how a laptop is imaged.
+          </div>
+          <Segmented
+            value={category ?? ''}
+            onChange={(next) => setActiveCategory(next === '' ? null : next)}
+            options={spans.map((c) => {
+              const q = draft.questionnaires.find((x) => x.point === point && x.category === c);
+              return {
+                value: c ?? '',
+                label: q ? `${c} · ${q.questions.length}` : String(c),
               };
             })}
           />
@@ -1412,21 +1467,29 @@ export function QuestionnaireStep({
 
       <div style={{ fontSize: 12, color: color.textSecondary, lineHeight: 1.6 }}>
         <strong style={{ color: color.textBody }}>{pointLabel(point)}</strong> — {POINT_PURPOSE[point]}
+        {category !== null && spans.length > 1 && (
+          <> Asked of the <strong style={{ color: color.textBody }}>{category}</strong> shortlist.</>
+        )}
       </div>
 
       <Field
         label="Questionnaire template"
-        hint="Picking a template copies its questions here. Editing them changes this event only."
+        hint={
+          category === null || spans.length === 1
+            ? 'Picking a template copies its questions here. Editing them changes this event only.'
+            : `Templates the ${category} library serves at this point. Picking one copies its questions here; editing them changes this event only.`
+        }
       >
         <Select
           value={current.templateId ?? 'BLANK'}
           onChange={(e) => {
             const id = e.target.value;
             const template = options.find((t) => t.id === id);
+            const prefix = `${point.toLowerCase()}-${category === null ? '' : `${categorySlug(category)}-`}${Date.now()}`;
             write(
               template
-                ? instantiateTemplate(template, point, `${point.toLowerCase()}-${Date.now()}`)
-                : blankQuestionnaire(point, `${point.toLowerCase()}-${Date.now()}`),
+                ? instantiateTemplate(template, point, prefix, category)
+                : blankQuestionnaire(point, prefix, category),
             );
           }}
         >

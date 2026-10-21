@@ -7,6 +7,9 @@
  * bytes in and out of `handle`.
  */
 import * as seed from '../data/seed';
+import {
+  CATEGORY_TEMPLATES, LOGISTICS_TEMPLATES, TENANT_TEMPLATES,
+} from '../data/questionnaireTemplates';
 import { Repository } from './repository';
 import { createRouter, type ApiRequest, type ApiResponse } from './router';
 
@@ -21,10 +24,24 @@ export function seededState() {
     // auctions rather than to the primary event. Deduplicated because the
     // primary event's auction shares its roster with the event itself.
     bidders: Object.values(Object.fromEntries(
-      [...seed.EVENT_BIDDERS, ...auctions.flatMap((held) => held.bidders)]
-        .map((bidder) => [bidder.id, bidder]),
+      [
+        ...seed.EVENT_BIDDERS,
+        // The written asks' rosters. Without them the API knew the RFI, RFP and
+        // RFQ existed but not who had been invited to them, so asking for a
+        // supplier's own view of an ask answered that they were not on it.
+        ...seed.REQUEST_BIDDERS,
+        ...auctions.flatMap((held) => held.bidders),
+      ].map((bidder) => [bidder.id, bidder]),
     )),
-    questionnaires: [],
+    // The written asks the platform opens on already carry their questions, so
+    // `GET /api/events/:id/questionnaires` answers with the same set the
+    // portal shows rather than an empty list.
+    questionnaires: seed.REQUEST_QUESTIONNAIRES(),
+    // The library the API writes into, as the studio holds it: the tenant's
+    // templates plus every category's own.
+    questionnaireTemplates: [
+      ...TENANT_TEMPLATES, ...CATEGORY_TEMPLATES, ...LOGISTICS_TEMPLATES,
+    ],
     // The demonstration auctions, so `/api/auction-events` answers with the
     // same five the E-Auction board opens on rather than an empty list until
     // somebody publishes.

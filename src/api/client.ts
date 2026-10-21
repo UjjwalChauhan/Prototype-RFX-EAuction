@@ -17,7 +17,9 @@ import type { AuctionListRow } from './auctionRoutes';
 import type {
   CreatedEvents, SolicitationStage, SourcingEventInput, StageEventInput,
 } from '../domain/stageEvents';
-import type { Bid, SourcingEvent, Stage } from '../domain/types';
+import type {
+  Bid, Questionnaire, QuestionnaireTemplate, SourcingEvent, Stage, VendorInputPoint,
+} from '../domain/types';
 
 /** The path each stage's collection lives at. */
 export const STAGE_PATH: Record<SolicitationStage, string> = {
@@ -38,6 +40,50 @@ export interface AuctionQuery {
   side?: string;
   /** Only the auctions this supplier is invited to. */
   counterpartyId?: string;
+}
+
+/** Narrowing the template library. Every field is optional. */
+export interface TemplateQuery {
+  point?: VendorInputPoint;
+  category?: string;
+  status?: string;
+}
+
+/**
+ * A template as a caller writes one.
+ *
+ * Only a name, the points it is applied at and the questions are required. The
+ * rest takes the editor's own defaults, so a template created here behaves like
+ * one created in the studio rather than being a half-formed record that the
+ * wizard then refuses to publish.
+ */
+export interface TemplateInput {
+  name: string;
+  appliesTo: VendorInputPoint[];
+  questions: Record<string, unknown>[];
+  description?: string;
+  /** Naming a category files it in that category's library. */
+  categories?: string[];
+  sections?: { id?: string; name: string; sequence?: number }[];
+  code?: string;
+  status?: 'DRAFT' | 'PUBLISHED' | 'RETIRED';
+  scopeType?: 'TENANT' | 'CATEGORY' | 'TEMPLATE' | 'EVENT';
+  scopeId?: string;
+  createdBy?: string;
+}
+
+/** A library row, with what the caller needs to know before changing it. */
+export type TemplateRow = QuestionnaireTemplate & { usedBy: number; canDelete: boolean };
+
+/** Attaching a questionnaire to one ask. */
+export interface AttachQuestionnaireBody {
+  point?: VendorInputPoint;
+  /** Omit on an ask that spans one category. */
+  category?: string | null;
+  /** Copy this library template. Omit it and give `questions` instead. */
+  templateId?: string;
+  questions?: Record<string, unknown>[];
+  name?: string;
 }
 
 /** A bid, as a client submits one. Name the bidder either way round. */
@@ -89,6 +135,19 @@ export interface SourcingApi {
   bidderView(id: string, who: { bidderId?: string; counterpartyId?: string }): Promise<unknown>;
   placeBid(id: string, body: PlaceBidBody): Promise<BidOutcome>;
   control(id: string, body: ControlBody): Promise<unknown>;
+
+  /** The questionnaire template library. */
+  listTemplates(query?: TemplateQuery): Promise<TemplateRow[]>;
+  /** Write a template. Refused by the library's own validation rules. */
+  createTemplate(input: TemplateInput): Promise<QuestionnaireTemplate>;
+  /** Remove one. Refused once an event has been built from it. */
+  deleteTemplate(id: string): Promise<void>;
+  /** What one ask asks — one questionnaire per category in its basket. */
+  listQuestionnaires(
+    eventId: string, query?: { category?: string; counterpartyId?: string },
+  ): Promise<Questionnaire[]>;
+  /** Attach a questionnaire to an ask, from a template or from questions. */
+  createQuestionnaire(eventId: string, body: AttachQuestionnaireBody): Promise<Questionnaire>;
 }
 
 /** A refusal from the API, carrying the field errors that caused it. */
@@ -115,7 +174,9 @@ function unwrap(response: ApiResponse): unknown {
 
 /** Drop what was not asked for, so an absent filter is absent from the URL. */
 const toQuery = (
-  query: EventQuery | AuctionQuery | { bidderId?: string; counterpartyId?: string } = {},
+  query: EventQuery | AuctionQuery | TemplateQuery
+    | { bidderId?: string; counterpartyId?: string }
+    | { category?: string; counterpartyId?: string } = {},
 ): Record<string, string> =>
   Object.fromEntries(
     Object.entries(query).filter(([, value]) => value !== undefined && value !== ''),
@@ -173,6 +234,33 @@ export function localApi(
     },
     async control(id, body) {
       return call({ method: 'POST', path: `/api/auction-events/${id}/control`, body });
+    },
+    async listTemplates(query) {
+      const body = call({
+        method: 'GET', path: '/api/questionnaire-templates', query: toQuery(query),
+      }) as { templates: TemplateRow[] };
+      return body.templates;
+    },
+    async createTemplate(input) {
+      const body = call({
+        method: 'POST', path: '/api/questionnaire-templates', body: input,
+      }) as { template: QuestionnaireTemplate };
+      return body.template;
+    },
+    async deleteTemplate(id) {
+      call({ method: 'DELETE', path: `/api/questionnaire-templates/${id}` });
+    },
+    async listQuestionnaires(eventId, query) {
+      const body = call({
+        method: 'GET', path: `/api/events/${eventId}/questionnaires`, query: toQuery(query),
+      }) as { questionnaires: Questionnaire[] };
+      return body.questionnaires;
+    },
+    async createQuestionnaire(eventId, input) {
+      const body = call({
+        method: 'POST', path: `/api/events/${eventId}/questionnaires`, body: input,
+      }) as { questionnaire: Questionnaire };
+      return body.questionnaire;
     },
   };
 }
@@ -244,6 +332,33 @@ export function httpApi(baseUrl: string = DEFAULT_API_URL): SourcingApi {
     },
     async control(id, body) {
       return await call('POST', `/api/auction-events/${id}/control`, body);
+    },
+    async listTemplates(query) {
+      const body = await call(
+        'GET', '/api/questionnaire-templates', undefined, toQuery(query),
+      ) as { templates: TemplateRow[] };
+      return body.templates;
+    },
+    async createTemplate(input) {
+      const body = await call(
+        'POST', '/api/questionnaire-templates', input,
+      ) as { template: QuestionnaireTemplate };
+      return body.template;
+    },
+    async deleteTemplate(id) {
+      await call('DELETE', `/api/questionnaire-templates/${id}`);
+    },
+    async listQuestionnaires(eventId, query) {
+      const body = await call(
+        'GET', `/api/events/${eventId}/questionnaires`, undefined, toQuery(query),
+      ) as { questionnaires: Questionnaire[] };
+      return body.questionnaires;
+    },
+    async createQuestionnaire(eventId, input) {
+      const body = await call(
+        'POST', `/api/events/${eventId}/questionnaires`, input,
+      ) as { questionnaire: Questionnaire };
+      return body.questionnaire;
     },
   };
 }

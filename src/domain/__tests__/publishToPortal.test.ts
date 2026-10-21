@@ -31,6 +31,7 @@ function publish(patternId: JourneyPatternId, category: string, closesInHours = 
   };
   const shortlist = defaultShortlist(COUNTERPARTIES, category, null);
   const bidders: EventBidder[] = shortlist.map((counterpartyId, i) => ({
+    categories: [],
     id: `${eventId}-eb-${counterpartyId}`, eventId, counterpartyId,
     isProvisional: false, invitedAt: NOW, invitationStatus: 'SENT', declineReason: null,
     ndaAcceptedAt: null, participationStatus: 'NOT_STARTED', qualificationStatus: 'PENDING',

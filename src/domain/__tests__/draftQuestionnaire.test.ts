@@ -213,7 +213,7 @@ describe('seedQuestionnaires', () => {
 
   it('populates every point the journey asks at', () => {
     const seeded = seedQuestionnaires({
-      existing: [], points: ['RFI', 'RFP'], library, category: null, idSeed: 'evt-1',
+      existing: [], points: ['RFI', 'RFP'], library, categories: [null], idSeed: 'evt-1',
     });
     expect(seeded.map((q) => q.point)).toEqual(['RFI', 'RFP']);
     for (const questionnaire of seeded) {
@@ -223,7 +223,7 @@ describe('seedQuestionnaires', () => {
 
   it('populates from the template that applies at that point', () => {
     const [rfi] = seedQuestionnaires({
-      existing: [], points: ['RFI'], library, category: null, idSeed: 'evt-1',
+      existing: [], points: ['RFI'], library, categories: [null], idSeed: 'evt-1',
     });
     const source = templatesFor(library, 'RFI', null)[0];
     expect(rfi.templateId).toBe(source.id);
@@ -232,11 +232,11 @@ describe('seedQuestionnaires', () => {
 
   it('keeps edits already made at a point that survives a pattern switch', () => {
     const first = seedQuestionnaires({
-      existing: [], points: ['RFI'], library, category: null, idSeed: 'evt-1',
+      existing: [], points: ['RFI'], library, categories: [null], idSeed: 'evt-1',
     });
     const edited = removeDraftQuestion(first[0], first[0].questions[0].id);
     const after = seedQuestionnaires({
-      existing: [edited], points: ['RFI', 'RFQ'], library, category: null, idSeed: 'evt-1',
+      existing: [edited], points: ['RFI', 'RFQ'], library, categories: [null], idSeed: 'evt-1',
     });
     expect(after.find((q) => q.point === 'RFI')).toBe(edited);
     expect(after.find((q) => q.point === 'RFQ')!.questions.length).toBeGreaterThan(0);
@@ -244,7 +244,7 @@ describe('seedQuestionnaires', () => {
 
   it('falls back to blank where no template applies', () => {
     const seeded = seedQuestionnaires({
-      existing: [], points: ['INTAKE'], library, category: null, idSeed: 'evt-1',
+      existing: [], points: ['INTAKE'], library, categories: [null], idSeed: 'evt-1',
     });
     expect(seeded[0].templateId).toBeNull();
     expect(seeded[0].questions).toEqual([]);

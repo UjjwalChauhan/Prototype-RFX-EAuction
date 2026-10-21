@@ -348,11 +348,89 @@ const BROKEN_DRAFT: QuestionnaireTemplate = {
   createdAt: NOW - 9 * DAY,
 };
 
+// ---------------------------------------------------------------------------
+// QT-006 — handling and pallets, authored in the Logistics category.
+//
+// The point of this one is that it is *not* the tenant's RFQ template. A
+// consolidated event that buys cartons and pallets in the same breath is
+// buying in two markets, and the questions that separate a good pallet
+// supplier from a bad one — treatment certification, exchange pools, return
+// logistics — are not asked of anybody else. This is what a category library
+// is for, and why an event spanning two categories carries two questionnaires
+// at the same point.
+// ---------------------------------------------------------------------------
+
+const QT6 = 'qt-006';
+
+const LOGISTICS_HANDLING: QuestionnaireTemplate = {
+  id: QT6,
+  code: 'QT-RFQ-HANDLING',
+  name: 'Pallets and handling — RFQ',
+  description:
+    'Prices and the handling-specific assurances that go with them: phytosanitary treatment, pool membership and the return leg. Asked only of the logistics shortlist.',
+  appliesTo: ['RFQ'],
+  categories: ['Logistics'],
+  sections: [
+    { id: `${QT6}-sec-1`, name: 'Pricing', sequence: 1 },
+    { id: `${QT6}-sec-2`, name: 'Handling assurance', sequence: 2 },
+  ],
+  questions: [
+    q(QT6, `${QT6}-sec-1`, 1, 'LOG.PRICES', {
+      type: 'price_schedule', title: 'Price schedule',
+      helpText: 'Unit prices per pallet and per strapping line.',
+      envelope: 'COMMERCIAL', weight: 0, scoringMethod: 'NONE', maxScore: 0,
+    }),
+    q(QT6, `${QT6}-sec-2`, 2, 'LOG.ISPM15', {
+      type: 'yes_no', title: 'Are all timber pallets ISPM 15 heat treated and stamped?',
+      helpText: 'Untreated timber cannot cross a border, so this disqualifies rather than scores.',
+      envelope: 'TECHNICAL', weight: 0, scoringMethod: 'NONE', maxScore: 0,
+      isKnockout: true, isRequired: true, allowAttachment: true,
+    }),
+    q(QT6, `${QT6}-sec-2`, 3, 'LOG.POOL', {
+      type: 'single_choice', title: 'Pallet supply model',
+      helpText: 'An exchange pool and an outright sale are not comparable on unit price alone.',
+      envelope: 'TECHNICAL', weight: 20, scoringMethod: 'MANUAL',
+      rubric: 'Exchange pool with collection = 10 · exchange without collection = 6 · outright sale = 3',
+      config: {
+        options: [
+          { id: `${QT6}-q3-o1`, label: 'Exchange pool, collection included', score: 10, isDisqualifying: false, requiresDetail: false },
+          { id: `${QT6}-q3-o2`, label: 'Exchange pool, no collection', score: 6, isDisqualifying: false, requiresDetail: false },
+          { id: `${QT6}-q3-o3`, label: 'Outright sale', score: 3, isDisqualifying: false, requiresDetail: false },
+        ],
+      },
+    }),
+    q(QT6, `${QT6}-sec-2`, 4, 'LOG.RETURN', {
+      type: 'number', title: 'Collection lead time for returned pallets, in days',
+      helpText: 'From the call-off being raised.',
+      envelope: 'TECHNICAL', weight: 15, scoringMethod: 'RULE',
+      rubric: '≤2 = 10 · 3–5 = 7 · 6–10 = 4 · >10 = 1',
+      config: { min: 0, max: 60, unit: 'days', decimals: 0 },
+    }),
+  ],
+  status: 'PUBLISHED',
+  version: 1,
+  scopeType: 'CATEGORY',
+  scopeId: 'Logistics',
+  createdBy: 'user-ar',
+  createdAt: NOW - 30 * DAY,
+};
+
 export const TENANT_TEMPLATES: QuestionnaireTemplate[] = [
   RFI_QUALIFICATION, RFP_TECHNICAL, RFQ_COMMERCIAL, BROKEN_DRAFT,
 ];
 
+/** The Indirect category's own library, on top of the tenant's. */
 export const CATEGORY_TEMPLATES: QuestionnaireTemplate[] = [NEGOTIATION_CONFIRM];
+
+/**
+ * The Logistics category's library.
+ *
+ * Kept separate rather than merged into `CATEGORY_TEMPLATES` because they are
+ * registered at different scope ids: a template written for Logistics must not
+ * be offered to an Indirect-only event, and the config chain is what enforces
+ * that.
+ */
+export const LOGISTICS_TEMPLATES: QuestionnaireTemplate[] = [LOGISTICS_HANDLING];
 
 /**
  * Default weighting across the journey: qualification counts, but the scored

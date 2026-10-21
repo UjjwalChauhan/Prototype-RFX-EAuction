@@ -30,6 +30,7 @@ const EVENT: SourcingEvent = {
 };
 
 const BIDDER: EventBidder = {
+  categories: [],
   id: 'eb-ans', eventId: 'e-ans', counterpartyId: 'cp-abc', isProvisional: false,
   invitedAt: NOW - HOUR, invitationStatus: 'SENT', declineReason: null, ndaAcceptedAt: null,
   participationStatus: 'NOT_STARTED', qualificationStatus: 'PENDING', awardStatus: 'NONE',

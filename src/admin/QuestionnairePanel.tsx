@@ -36,9 +36,10 @@ import {
 } from '../domain/questionTypes';
 import {
   POINT_PURPOSE, PRICED_QUESTION_TYPES, TEMPLATE_CUSTOM_KEY, TEMPLATE_STATUS_LABELS,
-  TEMPLATE_WEIGHTING_KEY, VENDOR_INPUT_POINTS, emptyTemplate, inheritedCodes, newQuestion,
-  nextTemplateId, normalise, pointLabel, questionsInSection, scoredQuestions, suggestCode,
-  templateWeight, templatesFor, validateTemplate, validateWeighting, weightingForJourney,
+  TEMPLATE_WEIGHTING_KEY, VENDOR_INPUT_POINTS, deletionBlock, emptyTemplate, eventsUsing,
+  inheritedCodes, newQuestion, nextTemplateId, normalise, pointLabel, questionsInSection,
+  scoredQuestions, suggestCode, templateUseIndex, templateWeight, templatesFor, validateTemplate,
+  validateWeighting, weightingForJourney, type TemplateUse,
 } from '../domain/questionnaireTemplates';
 import { serverNow } from '../server/clock';
 import { useStore } from '../store/store';
@@ -80,6 +81,15 @@ export function QuestionnairePanel({
 
   const templates = library.items;
   const authoredHere = library.byScope.find((s) => s.scopeType === scope)?.items ?? [];
+
+  // What has actually been asked from each template. The event keeps a copy of
+  // the questions, so this is the only link back — and it is what decides
+  // whether a template can leave the library at all.
+  const uses = React.useMemo(
+    () => templateUseIndex(templates, state.questionnaires, state.events),
+    [templates, state.questionnaires, state.events],
+  );
+  const usesOf = (templateId: Id): TemplateUse[] => uses.get(templateId) ?? [];
 
   const weightingEditable =
     !weighting.isLocked ||
@@ -149,6 +159,12 @@ export function QuestionnairePanel({
 
   const inspected = templates.find((t) => t.id === inspecting) ?? null;
 
+  // The guard is structural: when a template is in use the modal is given no
+  // confirm handler at all, so there is no path from this screen to a delete —
+  // not a disabled button that a re-render could re-enable.
+  const deleting = templates.find((t) => t.id === deleteId) ?? null;
+  const deleteBlockedBy = deleting === null ? null : deletionBlock(usesOf(deleting.id));
+
   return (
     <div className="rfx-stack" style={{ gap: 14 }}>
       <Segmented
@@ -176,7 +192,9 @@ export function QuestionnairePanel({
       ) : (
         <TemplateLibrary
           scope={scope}
+          scopeId={scopeId}
           templates={templates}
+          uses={uses}
           canAuthor={scopeId !== null}
           onNew={startNew}
           onEdit={setEditing}
@@ -186,7 +204,11 @@ export function QuestionnairePanel({
         />
       )}
 
-      <TemplateInspector template={inspected} onClose={() => setInspecting(null)} />
+      <TemplateInspector
+        template={inspected}
+        uses={inspected === null ? [] : usesOf(inspected.id)}
+        onClose={() => setInspecting(null)}
+      />
 
       {editing && (
         <TemplateBuilder
@@ -200,18 +222,36 @@ export function QuestionnairePanel({
 
       <Modal
         open={deleteId !== null}
-        title="Delete this template?"
+        title={deleteBlockedBy === null ? 'Delete this template?' : 'This template has been used'}
         onClose={() => setDeleteId(null)}
-        onConfirm={() => {
-          writeTemplates(authoredHere.filter((t) => t.id !== deleteId));
-          setDeleteId(null);
-        }}
+        onConfirm={
+          deleteBlockedBy === null
+            ? () => {
+                writeTemplates(authoredHere.filter((t) => t.id !== deleteId));
+                setDeleteId(null);
+              }
+            : undefined
+        }
         confirmLabel="Delete template"
         confirmTone="destructive"
       >
-        Events already using it keep the questionnaire they were created with — a template is copied
-        onto the event, not referenced. Deleting it only stops new events from selecting it. Retiring
-        it instead keeps it visible in the library and out of new events.
+        {deleteBlockedBy === null ? (
+          <>
+            Nothing has been asked from <strong>{deleting?.name}</strong> yet — no event was built
+            from it, so removing it loses nothing. It goes from this library only; templates
+            inherited from a broader scope are unaffected.
+          </>
+        ) : (
+          <div className="rfx-stack" style={{ gap: 10 }}>
+            <div>{deleteBlockedBy}</div>
+            <UsedByList uses={usesOf(deleting?.id ?? '')} />
+            <div style={{ fontSize: 11.5, color: color.textSecondary }}>
+              Each event keeps its own copy of the questions, so deleting would not break them. It
+              would lose the authored original — the one place the intent behind an asking survives
+              in one piece, and what an evaluation challenged months later is answered from.
+            </div>
+          </div>
+        )}
       </Modal>
     </div>
   );
@@ -418,11 +458,19 @@ function JourneyWeighting({
 // Library
 // ---------------------------------------------------------------------------
 
-function TemplateLibrary({
-  scope, templates, canAuthor, onNew, onEdit, onDuplicate, onInspect, onDelete,
+/** Exported for the library tests, which paint the pane without a click. */
+export function TemplateLibrary({
+  scope, scopeId, templates, uses, canAuthor, onNew, onEdit, onDuplicate, onInspect, onDelete,
 }: {
   scope: ConfigScopeType;
+  /**
+   * The scope being viewed, not just its kind. Two categories are both
+   * CATEGORY scope and are not the same library — comparing only the kind
+   * would offer an edit here that writes somewhere else.
+   */
+  scopeId: Id | null;
   templates: QuestionnaireTemplate[];
+  uses: Map<Id, TemplateUse[]>;
   canAuthor: boolean;
   onNew: () => void;
   onEdit: (t: QuestionnaireTemplate) => void;
@@ -430,6 +478,28 @@ function TemplateLibrary({
   onInspect: (id: string) => void;
   onDelete: (id: string) => void;
 }) {
+  /**
+   * Why this row's delete is unavailable, or null when it is offered.
+   *
+   * Rendered disabled rather than hidden. The button used to be omitted unless
+   * the template was authored at the scope being viewed, which meant that on
+   * the studio's opening scope there was no delete anywhere and no hint that
+   * one existed — the buyer's conclusion was that the product has no delete,
+   * which is the correct conclusion from what was on screen.
+   */
+  const authoredHere = (t: QuestionnaireTemplate): boolean =>
+    t.scopeType === scope && (scopeId === null || t.scopeId === scopeId);
+
+  const deleteBlock = (t: QuestionnaireTemplate): string | null => {
+    if (!authoredHere(t)) {
+      const where = t.scopeType === 'CATEGORY' || t.scopeType === 'TEMPLATE'
+        ? `${SCOPE_LABELS[t.scopeType]} scope, under ${t.scopeId}`
+        : `${SCOPE_LABELS[t.scopeType]} scope`;
+      return `${t.name} is authored at ${where}. Open that scope to delete it — deleting it here would only hide it from one branch of the chain.`;
+    }
+    return deletionBlock(uses.get(t.id) ?? []);
+  };
+
   const columns: Column<QuestionnaireTemplate>[] = [
     {
       key: 'name', header: 'Template', width: '280px',
@@ -488,10 +558,24 @@ function TemplateLibrary({
     {
       key: 'scope', header: 'Authored at', width: '140px',
       render: (t) => (
-        <Chip tone={t.scopeType === scope ? 'brand' : 'neutral'}>
+        <Chip tone={authoredHere(t) ? 'brand' : 'neutral'} title={t.scopeId}>
           {SCOPE_LABELS[t.scopeType]}
         </Chip>
       ),
+    },
+    {
+      key: 'used', header: 'Used by', width: '130px',
+      render: (t) => {
+        const events = eventsUsing(uses.get(t.id) ?? []);
+        if (events.length === 0) {
+          return <span style={{ fontSize: 11.5, color: color.textMuted }}>not yet used</span>;
+        }
+        return (
+          <Chip tone="neutral" title={events.join(', ')}>
+            {events.length} event{events.length === 1 ? '' : 's'}
+          </Chip>
+        );
+      },
     },
     {
       key: 'actions', header: '', width: '190px',
@@ -501,7 +585,7 @@ function TemplateLibrary({
           <Button
             variant="tertiary"
             size="small"
-            disabled={t.scopeType !== scope}
+            disabled={!authoredHere(t)}
             onClick={() => onEdit(t)}
           >
             Edit
@@ -509,11 +593,16 @@ function TemplateLibrary({
           <Button variant="tertiary" size="small" disabled={!canAuthor} onClick={() => onDuplicate(t)}>
             Copy
           </Button>
-          {t.scopeType === scope && (
-            <Button variant="icon" size="small" aria-label={`Delete ${t.name}`} onClick={() => onDelete(t.id)}>
-              🗑
-            </Button>
-          )}
+          <Button
+            variant="icon"
+            size="small"
+            aria-label={`Delete ${t.name}`}
+            disabled={deleteBlock(t) !== null}
+            title={deleteBlock(t) ?? `Delete ${t.name}`}
+            onClick={() => onDelete(t.id)}
+          >
+            🗑
+          </Button>
         </div>
       ),
     },
@@ -555,8 +644,8 @@ function TemplateLibrary({
 // ---------------------------------------------------------------------------
 
 function TemplateInspector({
-  template, onClose,
-}: { template: QuestionnaireTemplate | null; onClose: () => void }) {
+  template, uses, onClose,
+}: { template: QuestionnaireTemplate | null; uses: TemplateUse[]; onClose: () => void }) {
   return (
     <Drawer
       open={template !== null}
@@ -572,6 +661,17 @@ function TemplateInspector({
           </div>
 
           <Issues validation={validateTemplate(template)} />
+
+          <Block
+            title="Used by"
+            hint={
+              uses.length === 0
+                ? 'Nothing has been asked from this template, so it can still be deleted.'
+                : 'Events built from this template. It stays in the library — retire it to keep it out of new events.'
+            }
+          >
+            <UsedByList uses={uses} />
+          </Block>
 
           <Block title="Applied at" hint="The points in a journey where this is put in front of a supplier.">
             <div className="rfx-stack" style={{ gap: 6 }}>
@@ -603,6 +703,35 @@ function TemplateInspector({
         </div>
       )}
     </Drawer>
+  );
+}
+
+/**
+ * Where a template has actually been asked. Shown by reference and point rather
+ * than as a bare count, because "used by 2 events" leaves a buyer who wants it
+ * gone with nowhere to go next.
+ */
+function UsedByList({ uses }: { uses: TemplateUse[] }) {
+  if (uses.length === 0) {
+    return (
+      <div style={{ fontSize: 11.5, color: color.textMuted }}>
+        No event has been built from this template yet.
+      </div>
+    );
+  }
+  return (
+    <div className="rfx-stack" style={{ gap: 5 }}>
+      {uses.map((use) => (
+        <div
+          key={`${use.eventId}-${use.stage}`}
+          style={{ display: 'flex', gap: 7, alignItems: 'baseline', fontSize: 11.5 }}
+        >
+          <code style={{ color: color.textSecondary }}>{use.eventNumber}</code>
+          <span style={{ flex: 1, minWidth: 0 }}>{use.title}</span>
+          <Chip tone="brand">{pointLabel(use.stage as VendorInputPoint)}</Chip>
+        </div>
+      ))}
+    </div>
   );
 }
 

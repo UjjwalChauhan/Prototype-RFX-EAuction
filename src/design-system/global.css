@@ -4,14 +4,15 @@
 
 body {
   margin: 0;
-  background: #F7F8FA;
-  color: #111827;
-  font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+  background: #FBFBFD;
+  color: #1D1D22;
+  /* Inter is already preloaded by index.html and portal.html. */
+  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   -webkit-font-smoothing: antialiased;
-  font-size: 14px;
+  font-size: 13px;
 }
 
-a { color: #2563EB; text-decoration: none; }
+a { color: #5B4CC4; text-decoration: none; }
 a:hover { text-decoration: underline; }
 
 button { font-family: inherit; }
@@ -21,7 +22,7 @@ input, select, textarea { font-family: inherit; }
 @keyframes rfx-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
 @keyframes rfx-shimmer { 0% { background-position: -400px 0; } 100% { background-position: 400px 0; } }
 @keyframes rfx-flash {
-  0% { background: #DCFCE7; }
+  0% { background: #E6F6EE; }
   100% { background: transparent; }
 }
 
@@ -33,8 +34,48 @@ input, select, textarea { font-family: inherit; }
   animation: rfx-shimmer 1.3s linear infinite;
 }
 
-.rfx-navrow:hover { background: #F4F5F7 !important; }
-.rfx-row:hover { background: #FAFBFC; }
+.rfx-navrow:hover { background: #F7F7FA !important; }
+
+/* ---- Sidebar, after the Buyer Portal reference -------------------------- */
+
+/* A group's children sit in a tinted panel hanging off the group row, so the
+   relationship is shown by the surface rather than by indentation alone. */
+.rfx-navgroup.open > .rfx-navrow { border-radius: 5px 5px 0 0; }
+.rfx-navgroup.open > .rfx-navrow,
+.rfx-navgroup.active > .rfx-navrow { background: #F1EFFC; }
+.rfx-navgroup.open > .rfx-navrow:hover,
+.rfx-navgroup.active > .rfx-navrow:hover { background: #E4E0FA !important; }
+
+.rfx-navsub { background: #F1EFFC; border-radius: 0 0 5px 5px; padding: 2px 6px 8px; margin-top: -2px; }
+.rfx-navsub .rfx-navrow { color: #6E6E7A; }
+.rfx-navsub .rfx-navrow:hover { background: #FAF9FE !important; }
+/* The selected child lifts off the tint onto white — the reference's cue. */
+.rfx-navsub .rfx-navrow.on,
+.rfx-navsub .rfx-navrow.on:hover {
+  background: #FFFFFF !important;
+  color: #1D1D22;
+  font-weight: 500;
+  box-shadow: 0 0 0 1px #E7E7EE;
+}
+
+/* A group nested inside a group: the same behaviour, one tint deeper, so the
+   two levels are told apart by surface rather than by indentation alone. A
+   selected leaf still lifts onto white at either depth — "white means you are
+   here" has to hold wherever the row sits. */
+.rfx-navgroup.nested { margin: 2px 0; }
+.rfx-navgroup.nested > .rfx-navrow { border-radius: 5px; }
+.rfx-navgroup.nested.open > .rfx-navrow { border-radius: 5px 5px 0 0; }
+.rfx-navgroup.nested.open > .rfx-navrow,
+.rfx-navgroup.nested.active > .rfx-navrow { background: #E4E0FA; color: #5B4CC4; }
+.rfx-navgroup.nested > .rfx-navrow:hover { background: #E4E0FA !important; }
+
+.rfx-navsub.nested { background: #E4E0FA; border-radius: 0 0 5px 5px; padding: 2px 5px 6px; margin-top: -2px; }
+.rfx-navsub.nested .rfx-navrow { padding-left: 14px; }
+.rfx-navsub.nested .rfx-navrow:hover { background: #F1EFFC !important; }
+
+/* The round tool buttons under the brand block. */
+.rfx-brandtool:hover { color: #6C5DD3 !important; border-color: #6C5DD3 !important; }
+.rfx-row:hover, .rfx-row:hover > td { background: #F2F1FA; }
 .rfx-flash { animation: rfx-flash 1.4s ease-out; }
 
 /* Wide content scrolls inside its own container; the page never scrolls sideways.
@@ -122,6 +163,33 @@ input, select, textarea { font-family: inherit; }
 @media (max-width: 920px) {
   .rfx-nav,
   .rfx-triple { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* The Control Room's plugin grid.
+
+   Four columns where there is room, falling to two and then one. `auto-fill`
+   with a minimum rather than a fixed count, so the cards keep a readable width
+   instead of four of them squeezing into a 900px pane: a plugin card whose
+   description wraps to seven lines is one an administrator stops reading. */
+.rfx-plugin-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(238px, 1fr));
+  gap: 14px;
+  align-items: stretch;
+}
+
+/* A label that belongs to a control but is carried by its placeholder on
+   screen. Still read aloud, and still the thing a test can search for. */
+.rfx-visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
 }
 
 /* Long unbroken tokens — ids, emails, file names — wrap rather than bleed out. */
