@@ -1,14 +1,115 @@
+@import "tailwindcss";
+
+/* ===========================================================================
+   shadcn/ui token layer.
+
+   Two layers on purpose, which is shadcn's own arrangement. `:root` holds the
+   raw values, so a theme is swapped by redefining variables rather than by
+   touching components; `@theme inline` maps them onto Tailwind's colour
+   namespace, so `bg-primary`, `text-muted-foreground` and `border-input` mean
+   what they mean everywhere else in the shadcn world.
+
+   The palette is shadcn's neutral (zinc) scale. The primary is this product's
+   own violet rather than shadcn's near-black default — shadcn is deliberately
+   theme-agnostic, and the brand is not something a component library gets to
+   decide.
+
+   `tokens.ts` carries the same values for the screens that still style
+   inline. One palette, read two ways; see the note there.
+   ========================================================================= */
+
+:root {
+  --background: #FFFFFF;
+  --foreground: #09090B;
+
+  --card: #FFFFFF;
+  --card-foreground: #09090B;
+
+  --popover: #FFFFFF;
+  --popover-foreground: #09090B;
+
+  --primary: #6C5DD3;
+  --primary-foreground: #FFFFFF;
+
+  --secondary: #F4F4F5;
+  --secondary-foreground: #18181B;
+
+  --muted: #F4F4F5;
+  --muted-foreground: #71717A;
+
+  --accent: #F2F0FD;
+  --accent-foreground: #5B4CC4;
+
+  --destructive: #EF4444;
+  --destructive-foreground: #FFFFFF;
+
+  --success: #16A34A;
+  --warning: #F59E0B;
+  --info: #3B82F6;
+
+  --border: #E4E4E7;
+  --input: #E4E4E7;
+  --ring: #6C5DD3;
+
+  --radius: 0.5rem;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-info: var(--info);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+
+  --font-sans: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
+}
+
+@layer base {
+  /* Tailwind's preflight strips list markers and heading sizes. The screens
+     predate it and set their own padding while expecting the marker to be
+     there, so the two that matter are put back rather than hunted down in
+     fifty files. */
+  ul { list-style: disc; }
+  ol { list-style: decimal; }
+}
+
 :root { color-scheme: light; }
 
 * { box-sizing: border-box; }
 
 body {
   margin: 0;
-  background: #FBFBFD;
-  color: #1D1D22;
+  background: #FAFAFA;
+  color: #09090B;
   /* Inter is already preloaded by index.html and portal.html. */
   font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  /* Denser than shadcn's 14px default: this is an operator console, and the
+     tables carry more columns than a marketing app's do. */
   font-size: 13px;
 }
 
@@ -27,14 +128,14 @@ input, select, textarea { font-family: inherit; }
 }
 
 .rfx-skeleton {
-  background: #EEF0F3;
-  background-image: linear-gradient(90deg, #EEF0F3 0, #F6F7F9 120px, #EEF0F3 240px);
+  background: #F4F4F5;
+  background-image: linear-gradient(90deg, #F4F4F5 0, #FAFAFA 120px, #F4F4F5 240px);
   background-size: 640px 100%;
   border-radius: 5px;
   animation: rfx-shimmer 1.3s linear infinite;
 }
 
-.rfx-navrow:hover { background: #F7F7FA !important; }
+.rfx-navrow:hover { background: #F4F4F5 !important; }
 
 /* ---- Sidebar, after the Buyer Portal reference -------------------------- */
 
@@ -42,20 +143,20 @@ input, select, textarea { font-family: inherit; }
    relationship is shown by the surface rather than by indentation alone. */
 .rfx-navgroup.open > .rfx-navrow { border-radius: 5px 5px 0 0; }
 .rfx-navgroup.open > .rfx-navrow,
-.rfx-navgroup.active > .rfx-navrow { background: #F1EFFC; }
+.rfx-navgroup.active > .rfx-navrow { background: #F2F0FD; }
 .rfx-navgroup.open > .rfx-navrow:hover,
-.rfx-navgroup.active > .rfx-navrow:hover { background: #E4E0FA !important; }
+.rfx-navgroup.active > .rfx-navrow:hover { background: #E3DFFA !important; }
 
-.rfx-navsub { background: #F1EFFC; border-radius: 0 0 5px 5px; padding: 2px 6px 8px; margin-top: -2px; }
-.rfx-navsub .rfx-navrow { color: #6E6E7A; }
-.rfx-navsub .rfx-navrow:hover { background: #FAF9FE !important; }
+.rfx-navsub { background: #F2F0FD; border-radius: 0 0 5px 5px; padding: 2px 6px 8px; margin-top: -2px; }
+.rfx-navsub .rfx-navrow { color: #71717A; }
+.rfx-navsub .rfx-navrow:hover { background: #F8F7FE !important; }
 /* The selected child lifts off the tint onto white — the reference's cue. */
 .rfx-navsub .rfx-navrow.on,
 .rfx-navsub .rfx-navrow.on:hover {
   background: #FFFFFF !important;
-  color: #1D1D22;
+  color: #09090B;
   font-weight: 500;
-  box-shadow: 0 0 0 1px #E7E7EE;
+  box-shadow: 0 0 0 1px #E4E4E7;
 }
 
 /* A group nested inside a group: the same behaviour, one tint deeper, so the
@@ -66,16 +167,16 @@ input, select, textarea { font-family: inherit; }
 .rfx-navgroup.nested > .rfx-navrow { border-radius: 5px; }
 .rfx-navgroup.nested.open > .rfx-navrow { border-radius: 5px 5px 0 0; }
 .rfx-navgroup.nested.open > .rfx-navrow,
-.rfx-navgroup.nested.active > .rfx-navrow { background: #E4E0FA; color: #5B4CC4; }
-.rfx-navgroup.nested > .rfx-navrow:hover { background: #E4E0FA !important; }
+.rfx-navgroup.nested.active > .rfx-navrow { background: #E3DFFA; color: #5B4CC4; }
+.rfx-navgroup.nested > .rfx-navrow:hover { background: #E3DFFA !important; }
 
-.rfx-navsub.nested { background: #E4E0FA; border-radius: 0 0 5px 5px; padding: 2px 5px 6px; margin-top: -2px; }
+.rfx-navsub.nested { background: #E3DFFA; border-radius: 0 0 5px 5px; padding: 2px 5px 6px; margin-top: -2px; }
 .rfx-navsub.nested .rfx-navrow { padding-left: 14px; }
-.rfx-navsub.nested .rfx-navrow:hover { background: #F1EFFC !important; }
+.rfx-navsub.nested .rfx-navrow:hover { background: #F2F0FD !important; }
 
 /* The round tool buttons under the brand block. */
 .rfx-brandtool:hover { color: #6C5DD3 !important; border-color: #6C5DD3 !important; }
-.rfx-row:hover, .rfx-row:hover > td { background: #F2F1FA; }
+.rfx-row:hover, .rfx-row:hover > td { background: #F4F2FE; }
 .rfx-flash { animation: rfx-flash 1.4s ease-out; }
 
 /* Wide content scrolls inside its own container; the page never scrolls sideways.
@@ -84,9 +185,10 @@ input, select, textarea { font-family: inherit; }
    the scroller and widens the whole page. */
 .rfx-scroll-x { overflow-x: auto; position: relative; }
 
-/* Focus is always visible — keyboard users are first-class. */
+/* Focus is always visible — keyboard users are first-class. shadcn rings in
+   the brand rather than in a second accent nobody chose. */
 :focus-visible {
-  outline: 2px solid #2563EB;
+  outline: 2px solid var(--ring);
   outline-offset: 2px;
 }
 
@@ -129,6 +231,13 @@ input, select, textarea { font-family: inherit; }
 .rfx-nav > *,
 .rfx-triple > *,
 .rfx-stack > * { min-width: 0; }
+
+/* The same vertical stack, but in normal flow rather than grid. A grid item's
+   containing block is its own auto-sized row, so `position: sticky` on one has
+   nowhere to travel and silently does nothing; a flex column gives its children
+   the whole stack as their containing block. Use this one when a card sticks. */
+.rfx-stack-flow { display: flex; flex-direction: column; align-items: stretch; }
+.rfx-stack-flow > * { min-width: 0; }
 
 /* Single column — the collapsed form of every layout above, and the wrapper
    every stack of cards uses. `minmax(0, 1fr)` is what makes it safe: an `auto`

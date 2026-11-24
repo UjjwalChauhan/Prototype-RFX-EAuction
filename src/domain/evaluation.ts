@@ -119,6 +119,145 @@ export function technicalScore(
 }
 
 // ---------------------------------------------------------------------------
+// Section scoring — what each part of the questionnaire earned
+// ---------------------------------------------------------------------------
+
+export interface SectionScore {
+  sectionId: Id | null;
+  name: string;
+  /** What the section set aside for its questions. */
+  declaredWeight: number;
+  /** What its scored questions actually carry. Scoring runs off this. */
+  allocatedWeight: number;
+  /**
+   * The section's own result on the questionnaire's scale, or null when
+   * nothing in it has been scored yet.
+   *
+   * Reported out of the scale, not out of the section's weight: an evaluator
+   * reading "7.5 of 10" for one section and "7.5 of 10" for another is reading
+   * two comparable statements of how well the supplier did. How much each one
+   * *counts* is `allocatedWeight`, and that is a separate number precisely so
+   * the two cannot be confused.
+   */
+  score: number | null;
+  /** How much of this section contributes to the overall, as a percentage. */
+  sharePct: number;
+  scored: number;
+  total: number;
+}
+
+export interface ScoreBreakdown {
+  /** One per section, in section order, plus the ungrouped questions last. */
+  sections: SectionScore[];
+  /** The whole questionnaire on its scale, or null when nothing is scored. */
+  overall: number | null;
+  scale: number;
+  /** Total weight actually in play — the sum of the sections' allocations. */
+  weight: number;
+  scored: number;
+  total: number;
+}
+
+/**
+ * A supplier's result, split by section and totalled.
+ *
+ * Two deliberate choices, both of which change what the numbers mean.
+ *
+ * **The overall is weighted by question, not by section.** A section's
+ * influence is the sum of what its questions carry, so a section that set aside
+ * 40 and allocated 30 counts 30. Holding it to 40 would make the missing 10
+ * unearnable and mark every supplier down for the buyer's arithmetic.
+ *
+ * **An unscored question is excluded, not counted as zero.** A half-evaluated
+ * response would otherwise look like a bad one, and the ranking would move
+ * every time an evaluator got round to another answer. `scored` against
+ * `total` is what says how much of the picture this is.
+ */
+export function scoreBreakdown({
+  bidderId, questions, sections, scores, scale = 100,
+  mode = 'AVERAGE', divergenceThreshold = 20,
+}: {
+  bidderId: Id;
+  questions: Question[];
+  sections: { id: Id; name: string; sequence: number; weight: number }[];
+  scores: Score[];
+  scale?: number;
+  mode?: ConsensusMode;
+  divergenceThreshold?: number;
+}): ScoreBreakdown {
+  const live = effectiveScores(scores).filter((s) => s.bidderId === bidderId);
+  const counts = (q: Question) =>
+    q.scoringMethod !== 'NONE' && q.weight > 0 && q.maxScore > 0;
+
+  /** One group's result: the weighted ratio of what was scored in it. */
+  const resultFor = (group: Question[]) => {
+    let weighted = 0;
+    let weightSum = 0;
+    let scored = 0;
+    for (const question of group.filter(counts)) {
+      const consensusValue = consensus(
+        live.filter((s) => s.questionId === question.id),
+        question.maxScore, mode, divergenceThreshold,
+      ).value;
+      if (consensusValue === null) continue;
+      scored += 1;
+      weightSum += question.weight;
+      weighted += (consensusValue / question.maxScore) * question.weight;
+    }
+    return { weighted, weightSum, scored };
+  };
+
+  const ordered = [...sections].sort((a, b) => a.sequence - b.sequence);
+  const grouped: { id: Id | null; name: string; declared: number; questions: Question[] }[] = [
+    ...ordered.map((section) => ({
+      id: section.id as Id | null,
+      name: section.name,
+      declared: Math.max(0, section.weight),
+      questions: questions.filter((q) => q.sectionId === section.id),
+    })),
+  ];
+  // Questions in no section still score; they are reported together so the
+  // parts add up to the whole rather than quietly going missing.
+  const loose = questions.filter(
+    (q) => q.sectionId === null || !ordered.some((section) => section.id === q.sectionId),
+  );
+  if (loose.length > 0) {
+    grouped.push({ id: null, name: 'Ungrouped questions', declared: 0, questions: loose });
+  }
+
+  const allocationOf = (group: Question[]) =>
+    group.filter(counts).reduce((sum, q) => sum + q.weight, 0);
+
+  const totalAllocated = grouped.reduce((sum, g) => sum + allocationOf(g.questions), 0);
+
+  const sectionScores: SectionScore[] = grouped.map((group) => {
+    const { weighted, weightSum, scored } = resultFor(group.questions);
+    const allocated = allocationOf(group.questions);
+    return {
+      sectionId: group.id,
+      name: group.name,
+      declaredWeight: group.declared,
+      allocatedWeight: allocated,
+      score: weightSum > 0 ? (weighted / weightSum) * scale : null,
+      sharePct: totalAllocated > 0 ? (allocated / totalAllocated) * 100 : 0,
+      scored,
+      total: group.questions.filter(counts).length,
+    };
+  });
+
+  const all = resultFor(questions);
+
+  return {
+    sections: sectionScores,
+    overall: all.weightSum > 0 ? (all.weighted / all.weightSum) * scale : null,
+    scale,
+    weight: totalAllocated,
+    scored: all.scored,
+    total: questions.filter(counts).length,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Price normalisation
 // ---------------------------------------------------------------------------
 

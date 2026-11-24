@@ -26,7 +26,9 @@
 import { STAGE_LABELS } from './journeyPatterns';
 import { carryConfig, defaultConfigFor, validateQuestionConfig } from './questionTypes';
 import type {
-  Id, QuestionType, Questionnaire, QuestionnaireTemplate, ServerMillis, SourcingEvent, Stage,
+  Id, QuestionAudience, QuestionScope, QuestionType, Questionnaire, QuestionnaireTemplate,
+  ServerMillis,
+  SourcingEvent, Stage,
   StageWeight, TemplateQuestion, TemplateSection, TemplateStatus, VendorInputPoint,
 } from './types';
 
@@ -34,6 +36,256 @@ import type {
 export const PRICED_QUESTION_TYPES: QuestionType[] = [
   'price_schedule', 'rate_table', 'quantity_break',
 ];
+
+/**
+ * Who a question is put to, and why a buyer would choose each.
+ *
+ * The two are not interchangeable and the difference is not cosmetic. A
+ * vendor-level question is answered once and is the same fact however many
+ * lines the event carries — a certificate, a turnover figure, a policy. A
+ * line-level question is answered once per line and genuinely differs between
+ * them: lead time on a laptop is not lead time on a pallet of paper.
+ *
+ * Before this existed, buyers asked the line-level ones anyway and took the
+ * answer as a spreadsheet attachment, which is the same information with none
+ * of the structure — uncomparable across suppliers and unscoreable by anyone.
+ */
+export const QUESTION_SCOPES: { id: QuestionScope; label: string; purpose: string }[] = [
+  {
+    id: 'VENDOR',
+    label: 'Per vendor',
+    purpose: 'Asked once. The answer is about the company and is the same whatever is in the basket.',
+  },
+  {
+    id: 'LINE',
+    label: 'Per line item',
+    purpose: 'Asked once for every line in the basket. The answer differs item by item.',
+  },
+];
+
+export const QUESTION_SCOPE_LABEL: Record<QuestionScope, string> = {
+  VENDOR: 'Per vendor',
+  LINE: 'Per line item',
+};
+
+/**
+ * Types that cannot sensibly be repeated per line.
+ *
+ * A price schedule already spans the whole basket — asking it per line would
+ * put a grid of every line inside every line. Structural types display
+ * something rather than ask for anything, so repeating them per line just
+ * repeats the heading.
+ */
+export const BASKET_WIDE_TYPES: QuestionType[] = [
+  'price_schedule', 'rate_table', 'quantity_break',
+];
+
+export const STRUCTURAL_TYPES: QuestionType[] = [
+  'section', 'page_break', 'instruction_block', 'hidden_metadata',
+];
+
+export function canAskPerLine(type: QuestionType): boolean {
+  return !BASKET_WIDE_TYPES.includes(type) && !STRUCTURAL_TYPES.includes(type);
+}
+
+/**
+ * The scope a question actually runs at.
+ *
+ * The section owns the grain and the question follows it, with one exception
+ * that is not a special case so much as a fact about the type: a price
+ * schedule inside a per-line section is still asked once, because it already
+ * spans the basket. A question in no section answers for itself.
+ */
+export function effectiveScope(
+  question: Pick<TemplateQuestion, 'type' | 'askedPer' | 'sectionId'>,
+  sections: TemplateSection[],
+): QuestionScope {
+  if (!canAskPerLine(question.type)) return 'VENDOR';
+  const section = sections.find((s) => s.id === question.sectionId);
+  return (section ? section.askedPer : question.askedPer);
+}
+
+/**
+ * Move a section to the other grain, taking its questions with it.
+ *
+ * Questions whose type cannot be repeated per line are left alone rather than
+ * dragged into an invalid state — a price schedule in a per-line section is
+ * still one price schedule, and refusing the whole change over it would make
+ * the control feel broken.
+ */
+export function setSectionScope(
+  template: QuestionnaireTemplate, sectionId: Id, askedPer: QuestionScope,
+): QuestionnaireTemplate {
+  return {
+    ...template,
+    sections: template.sections.map((s) => (s.id === sectionId ? { ...s, askedPer } : s)),
+    questions: template.questions.map((q) =>
+      (q.sectionId === sectionId && canAskPerLine(q.type) ? { ...q, askedPer } : q)),
+  };
+}
+
+/**
+ * Put the sections in order and number everything from the top.
+ *
+ * `sequence` is what the builder, the preview and the supplier's form all read
+ * the order from, so it has to be rewritten whenever anything moves rather
+ * than left to drift. Questions are numbered straight through the form, not
+ * restarted per section — question 9 is the ninth thing the supplier is asked,
+ * which is how anyone talking about it will refer to it.
+ */
+function resequence(template: QuestionnaireTemplate): QuestionnaireTemplate {
+  const sections = [...template.sections]
+    .sort((a, b) => a.sequence - b.sequence)
+    .map((section, index) => ({ ...section, sequence: index + 1 }));
+
+  const ordered: TemplateQuestion[] = [];
+  for (const section of sections) ordered.push(...questionsInSection(template, section.id));
+  // Anything in no section, or pointing at a section that is gone, goes last
+  // rather than being dropped — losing a question to a reorder would be the
+  // worst possible outcome of pressing an arrow.
+  ordered.push(...template.questions.filter((q) => !ordered.includes(q)));
+
+  return {
+    ...template,
+    sections,
+    questions: ordered.map((question, index) => ({ ...question, sequence: index + 1 })),
+  };
+}
+
+/** Move a section one place up (-1) or down (+1) the form. */
+export function moveSection(
+  template: QuestionnaireTemplate, sectionId: Id, by: -1 | 1,
+): QuestionnaireTemplate {
+  const sections = [...template.sections].sort((a, b) => a.sequence - b.sequence);
+  const at = sections.findIndex((s) => s.id === sectionId);
+  const to = at + by;
+  if (at < 0 || to < 0 || to >= sections.length) return template;
+  [sections[at], sections[to]] = [sections[to], sections[at]];
+  return resequence({ ...template, sections: sections.map((s, i) => ({ ...s, sequence: i + 1 })) });
+}
+
+/**
+ * Remove a section and the questions inside it.
+ *
+ * Taking the questions with it rather than orphaning them: a question whose
+ * section has gone sits outside every budget and appears in no section score,
+ * which the validator reports as a problem the buyer did not knowingly create.
+ * The caller is expected to say how many are going before calling this.
+ */
+export function removeSection(template: QuestionnaireTemplate, sectionId: Id): QuestionnaireTemplate {
+  return resequence({
+    ...template,
+    sections: template.sections.filter((s) => s.id !== sectionId),
+    questions: template.questions.filter((q) => q.sectionId !== sectionId),
+  });
+}
+
+/**
+ * Remove a question, and give its share back to the section it was taken from.
+ *
+ * A section's weight is the score its questions allocate between them. Delete
+ * a 15-point question from a section declaring 40 and leave the 40 standing,
+ * and the section claims three-eighths of the technical score while being able
+ * to award only a quarter of it — the gap is silently unearnable, and every
+ * supplier is marked down for it. So the declaration follows the question out.
+ *
+ * What it deliberately does not do is move that 15 anywhere else. Where the
+ * freed share belongs — another section, or nowhere because the decision is
+ * genuinely smaller now — is a judgement about what the buyer is buying, and
+ * the sections total meter says plainly that it is outstanding.
+ *
+ * Only a *scored* question frees anything: an unscored one carries weight that
+ * never reached the allocation in the first place, so taking it off the
+ * section would lower the budget twice.
+ */
+export function removeQuestion(
+  template: QuestionnaireTemplate, questionId: Id,
+): QuestionnaireTemplate {
+  const question = template.questions.find((q) => q.id === questionId);
+  if (question === undefined) return template;
+
+  const freed = isScored(question) ? question.weight : 0;
+
+  return resequence({
+    ...template,
+    sections: template.sections.map((section) =>
+      (section.id === question.sectionId && freed > 0
+        ? { ...section, weight: Math.max(0, section.weight - freed) }
+        : section)),
+    questions: template.questions.filter((q) => q.id !== questionId),
+  });
+}
+
+/** What a section's weight becomes if this question is removed. Null when it does not move. */
+export function weightAfterRemoving(
+  template: QuestionnaireTemplate, questionId: Id,
+): { section: TemplateSection; from: number; to: number } | null {
+  const question = template.questions.find((q) => q.id === questionId);
+  if (question === undefined || !isScored(question) || question.weight === 0) return null;
+  const section = template.sections.find((s) => s.id === question.sectionId);
+  if (section === undefined) return null;
+  return { section, from: section.weight, to: Math.max(0, section.weight - question.weight) };
+}
+
+/** Blocking errors indexed by the question each is about. */
+export function errorsByQuestion(errors: TemplateIssue[]): Map<Id, TemplateIssue[]> {
+  const byQuestion = new Map<Id, TemplateIssue[]>();
+  for (const error of errors) {
+    if (error.questionId === undefined) continue;
+    byQuestion.set(error.questionId, [...(byQuestion.get(error.questionId) ?? []), error]);
+  }
+  return byQuestion;
+}
+
+/** Move a question one place up (-1) or down (+1) inside its own section. */
+export function moveQuestion(
+  template: QuestionnaireTemplate, questionId: Id, by: -1 | 1,
+): QuestionnaireTemplate {
+  const question = template.questions.find((q) => q.id === questionId);
+  if (question === undefined) return template;
+
+  const siblings = questionsInSection(template, question.sectionId);
+  const at = siblings.findIndex((q) => q.id === questionId);
+  const to = at + by;
+  if (to < 0 || to >= siblings.length) return template;
+
+  // Swapping the two sequence numbers is enough: `resequence` then renumbers
+  // the whole form from the new order.
+  const swapped = template.questions.map((q) => {
+    if (q.id === siblings[at].id) return { ...q, sequence: siblings[to].sequence };
+    if (q.id === siblings[to].id) return { ...q, sequence: siblings[at].sequence };
+    return q;
+  });
+  return resequence({ ...template, questions: swapped });
+}
+
+/** What the sections declare between them. Must be 100 on a scored template. */
+export function sectionWeightTotal(template: { sections: TemplateSection[] }): number {
+  return template.sections.reduce((sum, section) => sum + Math.max(0, section.weight), 0);
+}
+
+/**
+ * Whether this template's sections are meant to add up.
+ *
+ * A pure RFI that scores nothing has every section at zero and is complete as
+ * it stands. The moment one section claims a share, the rest have to account
+ * for theirs — a template where the shares total 85 is one where nobody can
+ * say what the missing 15 was supposed to measure.
+ */
+export function isScoredTemplate(template: { sections: TemplateSection[] }): boolean {
+  return template.sections.some((section) => section.weight > 0);
+}
+
+/** How a question set splits between the two scopes, for a summary line. */
+export function scopeCounts(
+  questions: { type: QuestionType; askedPer: QuestionScope }[],
+): { vendor: number; line: number } {
+  const askable = questions.filter((q) => !STRUCTURAL_TYPES.includes(q.type));
+  return {
+    vendor: askable.filter((q) => q.askedPer !== 'LINE').length,
+    line: askable.filter((q) => q.askedPer === 'LINE').length,
+  };
+}
 
 /** The points in a journey where a supplier can be asked for information. */
 export const VENDOR_INPUT_POINTS: VendorInputPoint[] = [
@@ -107,6 +359,79 @@ export function questionsInSection(
   return template.questions
     .filter((q) => q.sectionId === sectionId)
     .sort((a, b) => a.sequence - b.sequence);
+}
+
+// ---------------------------------------------------------------------------
+// Section budgets — the weight a section may spend on its questions
+// ---------------------------------------------------------------------------
+
+/** The scale a buyer reads scores on, unless the questionnaire names another. */
+export const DEFAULT_SCORE_SCALE = 100;
+
+/** The scales offered in the editor. Any positive number is accepted. */
+export const SCORE_SCALE_PRESETS = [5, 10, 100];
+
+export interface SectionBudget {
+  section: TemplateSection;
+  /** What the section declared it is worth. */
+  declared: number;
+  /** What its questions actually carry between them. */
+  allocated: number;
+  /** Declared minus allocated. Negative is over-budget and is an error. */
+  remaining: number;
+  overspent: boolean;
+  /** Scored questions inside it. A section with none spends nothing. */
+  scored: number;
+}
+
+/**
+ * What each section has declared and what it has spent.
+ *
+ * The one piece of arithmetic every screen that touches section weighting needs,
+ * computed once here so the editor's meter, the validation and the scoring
+ * cannot each derive it slightly differently.
+ */
+export function sectionBudgets(template: QuestionnaireTemplate): SectionBudget[] {
+  return [...template.sections]
+    .sort((a, b) => a.sequence - b.sequence)
+    .map((section) => {
+      const inside = scoredQuestions(template).filter((q) => q.sectionId === section.id);
+      const allocated = inside.reduce((sum, q) => sum + q.weight, 0);
+      const declared = Math.max(0, section.weight);
+      return {
+        section,
+        declared,
+        allocated,
+        remaining: declared - allocated,
+        overspent: allocated > declared,
+        scored: inside.length,
+      };
+    });
+}
+
+/**
+ * The largest weight one question may take without breaking its section.
+ *
+ * The editor caps the input at this rather than letting a buyer type a number
+ * and then telling them off for it: an over-budget section is a state they
+ * should not be able to author in the first place. `null` means the question is
+ * in no section, so no budget applies to it.
+ */
+export function weightCeilingFor(
+  template: QuestionnaireTemplate, questionId: Id,
+): number | null {
+  const question = template.questions.find((q) => q.id === questionId);
+  if (question === undefined || question.sectionId === null) return null;
+  const budget = sectionBudgets(template).find((b) => b.section.id === question.sectionId);
+  if (budget === undefined) return null;
+  // Its own weight is already counted in `allocated`, so the ceiling is what is
+  // left plus what it is holding.
+  return Math.max(0, budget.remaining + (isScored(question) ? question.weight : 0));
+}
+
+/** Scored questions that sit in no section, and so against no budget. */
+export function ungroupedScored(template: QuestionnaireTemplate): TemplateQuestion[] {
+  return scoredQuestions(template).filter((q) => q.sectionId === null);
 }
 
 // ---------------------------------------------------------------------------
@@ -290,6 +615,30 @@ export function validateTemplate(
       });
     }
 
+    // Asked per line, but the type cannot be repeated per line.
+    if (question.askedPer === 'LINE' && !canAskPerLine(question.type)) {
+      errors.push({
+        code: 'LINE_SCOPE_NOT_POSSIBLE',
+        questionId: question.id,
+        message: BASKET_WIDE_TYPES.includes(question.type)
+          ? `"${question.title}" is a ${question.type}, which already spans every line in the basket. Asking it per line would put the whole grid inside each line.`
+          : `"${question.title}" displays something rather than asking for it, so repeating it per line only repeats the heading.`,
+      });
+    }
+
+    /**
+     * A knockout removes the supplier from the event. A per-line answer cannot
+     * carry that: one line failing a specification is a reason not to award
+     * that line, which is an award decision, not a gate on the whole bid.
+     */
+    if (question.askedPer === 'LINE' && question.isKnockout) {
+      errors.push({
+        code: 'LINE_KNOCKOUT',
+        questionId: question.id,
+        message: `"${question.title}" is asked per line and disqualifies on failure. A knockout removes the supplier from the whole event, which one failing line cannot justify — ask it per vendor, or drop the knockout and let the award decide line by line.`,
+      });
+    }
+
     // A knockout the supplier can skip never fires.
     if (question.isKnockout && !question.isRequired) {
       warnings.push({
@@ -334,6 +683,73 @@ export function validateTemplate(
     warnings.push({
       code: 'GATHERS_ONLY',
       message: 'Nothing in this template is scored, so it gathers information without contributing to the ranking. That is right for a pure RFI and wrong for an RFP.',
+    });
+  }
+
+  /**
+   * Sections are shares of one score, so they total 100.
+   *
+   * Before this was enforced, a template whose sections read 35 / 35 / 10 was
+   * silently normalised at scoring time, and the buyer who wrote it believed
+   * capability was worth 35% when it was worth 43.75%. The arithmetic was
+   * right and the number on the screen was a different number from the one
+   * doing the work.
+   */
+  if (isScoredTemplate(template)) {
+    const total = sectionWeightTotal(template);
+    if (total !== 100) {
+      errors.push({
+        code: 'SECTION_WEIGHTS_NOT_100',
+        message: total < 100
+          ? `The sections add up to ${total}%. ${100 - total}% of the technical score is unaccounted for — raise a section, or add the one that is missing.`
+          : `The sections add up to ${total}%, which is ${total - 100}% more score than there is to give. Lower a section until they total 100%.`,
+      });
+    }
+  }
+
+  // --- Section budgets ------------------------------------------------------
+  //
+  // A section's weight is the most its questions may carry between them. Over
+  // budget is an error because the declared share would be a lie; under budget
+  // is a warning because the questions still score, the section just turns out
+  // to be worth less than the buyer set aside for it.
+  for (const budget of sectionBudgets(template)) {
+    if (budget.overspent) {
+      errors.push({
+        code: 'SECTION_OVER_BUDGET',
+        message: `"${budget.section.name}" is worth ${budget.declared} but its questions carry ${budget.allocated} between them. Lower a question or raise the section — a section cannot award more than it is worth.`,
+      });
+    } else if (budget.declared > 0 && budget.scored === 0) {
+      warnings.push({
+        code: 'SECTION_WEIGHT_UNUSED',
+        message: `"${budget.section.name}" is worth ${budget.declared} but nothing inside it is scored, so none of that weight can be earned.`,
+      });
+    } else if (budget.remaining > 0 && budget.scored > 0) {
+      warnings.push({
+        code: 'SECTION_UNDER_BUDGET',
+        message: `"${budget.section.name}" set aside ${budget.declared} and allocated ${budget.allocated}. Scoring follows the questions, so the section is worth ${budget.allocated} — the remaining ${budget.remaining} is unspent, not lost.`,
+      });
+    }
+    if (budget.declared === 0 && budget.scored > 0) {
+      errors.push({
+        code: 'SECTION_SCORES_WITHOUT_WEIGHT',
+        message: `"${budget.section.name}" carries no weight but holds ${budget.scored} scored question(s). Give the section a weight to allocate from, or stop scoring its questions.`,
+      });
+    }
+  }
+
+  const loose = ungroupedScored(template);
+  if (loose.length > 0) {
+    warnings.push({
+      code: 'SCORED_OUTSIDE_SECTION',
+      message: `${loose.length} scored question(s) sit in no section, so they are outside every section budget and will not appear in any section score. Move them into one.`,
+    });
+  }
+
+  if (!(template.scoreScale > 0)) {
+    errors.push({
+      code: 'SCALE_INVALID',
+      message: 'A score scale has to be a positive number — it is what every section score and the overall score are reported out of.',
     });
   }
 
@@ -545,8 +961,9 @@ export function emptyTemplate({
     description: '',
     appliesTo: ['RFI'],
     categories: [],
-    sections: [{ id: `${id}-sec-1`, name: 'General', sequence: 1 }],
+    sections: [{ id: `${id}-sec-1`, name: 'General', sequence: 1, weight: 100, askedPer: 'VENDOR' }],
     questions: [],
+    scoreScale: DEFAULT_SCORE_SCALE,
     status: 'DRAFT',
     version: 1,
     scopeType,
@@ -577,6 +994,9 @@ export function newQuestion(
     rubric: null,
     isKnockout: false,
     allowAttachment: false,
+    // Asked of the supplier once. Per line is a deliberate choice, never a
+    // default: most questions are about the company, not the item.
+    askedPer: 'VENDOR',
     config: defaultConfigFor('short_text', `${template.id}-q-${sequence}`),
   };
 }
@@ -614,6 +1034,17 @@ export interface DraftQuestionnaire {
   templateName: string;
   sections: TemplateSection[];
   questions: TemplateQuestion[];
+  /** The scale this event's scores are reported on. Copied from the template. */
+  scoreScale: number;
+  /**
+   * Who each question is put to, where the buyer narrowed it.
+   *
+   * Keyed by question id and sparse by design: a question absent from the map
+   * is asked of every supplier invited and, at line grain, about every line.
+   * That is the ordinary case, so the ordinary case costs nothing to store and
+   * stays true as the shortlist and the basket change. See `questionAudience`.
+   */
+  audience?: Record<Id, QuestionAudience>;
 }
 
 /** Copy a library template into an event-owned working set. */
@@ -629,6 +1060,9 @@ export function instantiateTemplate(
     category,
     templateId: template.id,
     templateName: template.name,
+    scoreScale: template.scoreScale > 0 ? template.scoreScale : DEFAULT_SCORE_SCALE,
+    // The section weights come across with the sections: the budget is part of
+    // what the template is, not decoration on the library copy of it.
     sections: template.sections
       .slice()
       .sort((a, b) => a.sequence - b.sequence)
@@ -657,8 +1091,11 @@ export function blankQuestionnaire(
     category,
     templateId: null,
     templateName: 'Blank',
-    sections: [{ id: `${idPrefix}-sec-1`, name: 'General', sequence: 1 }],
+    sections: [{
+      id: `${idPrefix}-sec-1`, name: 'General', sequence: 1, weight: 100, askedPer: 'VENDOR',
+    }],
     questions: [],
+    scoreScale: DEFAULT_SCORE_SCALE,
   };
 }
 
@@ -677,6 +1114,7 @@ export function draftAsTemplate(draft: DraftQuestionnaire): QuestionnaireTemplat
     categories: draft.category === null ? [] : [draft.category],
     sections: draft.sections,
     questions: draft.questions,
+    scoreScale: draft.scoreScale,
     status: 'DRAFT',
     version: 1,
     scopeType: 'EVENT',
@@ -687,11 +1125,204 @@ export function draftAsTemplate(draft: DraftQuestionnaire): QuestionnaireTemplat
 }
 
 /**
+ * Fold a template back into the event's working questionnaire.
+ *
+ * The way back from `draftAsTemplate`, used when something that speaks
+ * templates — an uploaded spreadsheet, the template builder — has rewritten
+ * what the event asks.
+ *
+ * The link to the library is cut on the way through. The event is no longer
+ * asking the library's template; it is asking what came out of the file, and a
+ * published event claiming a provenance it does not have is worse than one
+ * claiming none. Narrowings whose questions did not survive are dropped with
+ * them, because an audience keyed to a question that no longer exists is a
+ * count that can never be right.
+ */
+export function draftFromTemplate(
+  draft: DraftQuestionnaire, template: QuestionnaireTemplate,
+): DraftQuestionnaire {
+  const live = new Set(template.questions.map((q) => q.id));
+  const kept = Object.entries(draft.audience ?? {}).filter(([id]) => live.has(id));
+  return {
+    ...draft,
+    templateId: null,
+    templateName: template.name.trim() === '' ? draft.templateName : template.name,
+    sections: template.sections,
+    questions: template.questions,
+    scoreScale: template.scoreScale > 0 ? template.scoreScale : draft.scoreScale,
+    audience: kept.length === 0 ? undefined : Object.fromEntries(kept),
+  };
+}
+
+/**
+ * Lift the event's working questionnaire into a library template.
+ *
+ * A questionnaire worth writing once is worth asking twice, and the shape it
+ * ends up in on a real event is a better starting point than anything written
+ * in the abstract. Ids are rewritten under the new template so the library
+ * copy and the event copy are genuinely separate documents — editing one must
+ * never reach the other.
+ *
+ * Saving over a template that already exists bumps its version rather than
+ * silently replacing it at version 1, because the library tells buyers which
+ * revision of a question set an event actually asked.
+ */
+export function templateFromDraft(
+  draft: DraftQuestionnaire,
+  {
+    id, name, appliesTo, scopeType, scopeId, userId, now, previous = null,
+  }: {
+    id: Id;
+    name: string;
+    appliesTo: VendorInputPoint[];
+    scopeType: QuestionnaireTemplate['scopeType'];
+    scopeId: Id;
+    userId: Id;
+    now: ServerMillis;
+    /** The template being written over, where this replaces one. */
+    previous?: QuestionnaireTemplate | null;
+  },
+): QuestionnaireTemplate {
+  const trimmed = name.trim();
+  return {
+    id,
+    code: previous?.code ?? suggestCode(trimmed, appliesTo),
+    name: trimmed,
+    description: previous?.description ?? '',
+    appliesTo: appliesTo.length === 0 ? [draft.point] : appliesTo,
+    // A template saved out of a category's questionnaire serves that category.
+    // One saved from an event that spans a single category carries it too —
+    // it is still the only category the questions were written against.
+    categories: draft.category === null ? [] : [draft.category],
+    sections: draft.sections.map((section) => ({ ...section, id: `${id}-${section.id}` })),
+    questions: draft.questions.map((question) => ({
+      ...question,
+      id: `${id}-${question.id}`,
+      templateId: id,
+      sectionId: question.sectionId === null ? null : `${id}-${question.sectionId}`,
+    })),
+    scoreScale: draft.scoreScale,
+    status: previous?.status ?? 'DRAFT',
+    version: previous === null ? 1 : previous.version + 1,
+    scopeType,
+    scopeId,
+    createdBy: previous?.createdBy ?? userId,
+    createdAt: previous?.createdAt ?? now,
+  };
+}
+
+/**
  * Add a question to a draft questionnaire.
  *
  * Ids are sequence-independent because questions get deleted: keying off the
  * length alone would reuse an id after a delete and collide with a survivor.
  */
+/**
+ * The points in the journey where a question is actually put to the supplier.
+ *
+ * A question is not asked "at a stage" in this model — each point carries its
+ * own questionnaire, and the same question appearing at two of them is two
+ * rows sharing one `code`. That is deliberate: the code is the join key that
+ * carries an answer given at RFI into RFP rather than asking twice. So "where
+ * is this asked?" is a question about the code, answered by looking across the
+ * event's questionnaires rather than at a field on the question.
+ */
+export function pointsAsking(
+  questionnaires: DraftQuestionnaire[], code: string, category: string | null,
+): VendorInputPoint[] {
+  const asking = questionnaires
+    .filter((q) => q.category === category && q.questions.some((x) => x.code === code))
+    .map((q) => q.point);
+  return VENDOR_INPUT_POINTS.filter((point) => asking.includes(point));
+}
+
+/**
+ * Ask the same question at a different set of points.
+ *
+ * Adding copies the question into that point's questionnaire under a fresh id
+ * and the same code, into a section of the same name — created if the target
+ * questionnaire has not got one, because a question landing outside every
+ * section would sit outside every budget and score nowhere.
+ *
+ * Removing takes the copy out. The last point is never removed: a question
+ * asked nowhere is a deleted question, and deleting has its own control that
+ * says so.
+ */
+export function setAskedAtPoints(
+  questionnaires: DraftQuestionnaire[],
+  source: TemplateQuestion,
+  category: string | null,
+  wanted: VendorInputPoint[],
+): DraftQuestionnaire[] {
+  const sourceSection = questionnaires
+    .find((q) => q.category === category && q.questions.some((x) => x.id === source.id))
+    ?.sections.find((s) => s.id === source.sectionId) ?? null;
+
+  const keep = wanted.length === 0
+    ? pointsAsking(questionnaires, source.code, category).slice(0, 1)
+    : wanted;
+
+  return questionnaires.map((questionnaire) => {
+    if (questionnaire.category !== category) return questionnaire;
+
+    const has = questionnaire.questions.some((q) => q.code === source.code);
+    const should = keep.includes(questionnaire.point);
+    if (has === should) return questionnaire;
+
+    if (!should) {
+      return {
+        ...questionnaire,
+        questions: questionnaire.questions.filter((q) => q.code !== source.code),
+      };
+    }
+
+    // Land it in a section of the same name, adding one if there is none.
+    let sections = questionnaire.sections;
+    let sectionId: Id | null = null;
+    if (sourceSection) {
+      const match = sections.find(
+        (s) => s.name.trim().toLowerCase() === sourceSection.name.trim().toLowerCase(),
+      );
+      if (match) {
+        sectionId = match.id;
+      } else {
+        sectionId = `${questionnaire.point.toLowerCase()}-sec-${sections.length + 1}-${source.code}`;
+        sections = [
+          ...sections,
+          {
+            ...sourceSection,
+            id: sectionId,
+            sequence: sections.length + 1,
+            // The budget does not travel: a section carrying 40% at RFP does
+            // not thereby carry 40% at RFQ, where the rest of the form is
+            // different. The buyer sets it where it now applies.
+            weight: 0,
+          },
+        ];
+      }
+    }
+
+    const sequence = questionnaire.questions.reduce((max, q) => Math.max(max, q.sequence), 0) + 1;
+    return {
+      ...questionnaire,
+      sections,
+      questions: [
+        ...questionnaire.questions,
+        {
+          ...source,
+          id: `${questionnaire.point.toLowerCase()}-q-${sequence}-${source.code}`,
+          sectionId,
+          sequence,
+          // Weight is per questionnaire for the same reason the section's is.
+          weight: 0,
+          scoringMethod: source.isKnockout ? source.scoringMethod : 'NONE',
+          maxScore: 0,
+        },
+      ],
+    };
+  });
+}
+
 export function addDraftQuestion(
   draft: DraftQuestionnaire, sectionId: Id | null,
 ): DraftQuestionnaire {
@@ -717,6 +1348,7 @@ export function addDraftQuestion(
     rubric: null,
     isKnockout: false,
     allowAttachment: false,
+    askedPer: 'VENDOR',
     config: defaultConfigFor('short_text', id),
   };
   return { ...draft, questions: [...draft.questions, question] };
@@ -814,13 +1446,21 @@ export function moveDraftQuestion(
 }
 
 /** Add a section to group questions under. */
-export function addDraftSection(draft: DraftQuestionnaire, name: string): DraftQuestionnaire {
+export function addDraftSection(
+  draft: DraftQuestionnaire, name: string, askedPer: QuestionScope = 'VENDOR',
+): DraftQuestionnaire {
   const sequence = draft.sections.reduce((max, s) => Math.max(max, s.sequence), 0) + 1;
   return {
     ...draft,
     sections: [
       ...draft.sections,
-      { id: `${draft.templateId ?? 'draft'}-sec-${sequence}-${Date.now()}`, name, sequence },
+      // A new section starts at zero: it has nothing in it yet, and a section
+      // that silently claimed weight would put the questionnaire over budget
+      // the moment it was added.
+      {
+        id: `${draft.templateId ?? 'draft'}-sec-${sequence}-${Date.now()}`, name, sequence,
+        weight: 0, askedPer,
+      },
     ],
   };
 }

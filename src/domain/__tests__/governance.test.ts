@@ -377,9 +377,9 @@ describe('journey patterns', () => {
     expect(patternsForSide('BUY').every((p) => p.side === 'BUY')).toBe(true);
   });
 
-  it('reshapes the wizard between four and nine steps', () => {
+  it('reshapes the wizard between three and eight steps', () => {
     expect(JOURNEY_PATTERNS['JP-08'].wizardSteps.length).toBeLessThanOrEqual(4);
-    expect(JOURNEY_PATTERNS['JP-05'].wizardSteps.length).toBe(9);
+    expect(JOURNEY_PATTERNS['JP-05'].wizardSteps.length).toBe(8);
   });
 
   it('names supplier tasks by what the supplier does', () => {
@@ -523,13 +523,13 @@ describe('envelope guard', () => {
       id: 'q1', questionnaireId: 'qn1', sectionId: null, sequence: 1, code: 'TECH',
       type: 'short_text', title: 'Capability', helpText: '', isRequired: true,
       envelope: 'TECHNICAL', weight: 10, scoringMethod: 'MANUAL', maxScore: 10,
-      rubric: null, isKnockout: false, allowAttachment: true,
+      rubric: null, isKnockout: false, allowAttachment: true, askedPer: 'VENDOR',
     },
     {
       id: 'q2', questionnaireId: 'qn1', sectionId: null, sequence: 2, code: 'COMM',
       type: 'number', title: 'Payment terms', helpText: '', isRequired: true,
       envelope: 'COMMERCIAL', weight: 10, scoringMethod: 'RULE', maxScore: 10,
-      rubric: null, isKnockout: false, allowAttachment: false,
+      rubric: null, isKnockout: false, allowAttachment: false, askedPer: 'VENDOR',
     },
   ];
 

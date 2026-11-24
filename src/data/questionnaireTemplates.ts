@@ -41,6 +41,8 @@ function q(
     rubric: null,
     isKnockout: false,
     allowAttachment: false,
+    // Asked once of the supplier unless the question says otherwise.
+    askedPer: 'VENDOR',
     ...partial,
     // The answer format defaults to whatever the type needs, so a seeded
     // question is askable without spelling out every field.
@@ -68,9 +70,9 @@ const RFI_QUALIFICATION: QuestionnaireTemplate = {
   appliesTo: ['RFI'],
   categories: [],
   sections: [
-    { id: `${QT1}-sec-1`, name: 'Company & compliance', sequence: 1 },
-    { id: `${QT1}-sec-2`, name: 'Capability', sequence: 2 },
-    { id: `${QT1}-sec-3`, name: 'Sustainability', sequence: 3 },
+    { id: `${QT1}-sec-1`, name: 'Company & compliance', sequence: 1, weight: 40, askedPer: 'VENDOR' },
+    { id: `${QT1}-sec-2`, name: 'Capability', sequence: 2, weight: 40, askedPer: 'VENDOR' },
+    { id: `${QT1}-sec-3`, name: 'Sustainability', sequence: 3, weight: 20, askedPer: 'VENDOR' },
   ],
   questions: [
     q(QT1, `${QT1}-sec-1`, 1, 'CO.YEARS', {
@@ -81,7 +83,7 @@ const RFI_QUALIFICATION: QuestionnaireTemplate = {
     }),
     q(QT1, `${QT1}-sec-1`, 2, 'CO.ISO9001', {
       type: 'certificate', title: 'ISO 9001 certification',
-      helpText: 'Attach a current certificate.', weight: 15,
+      helpText: 'Attach a current certificate.', weight: 20,
       rubric: 'Valid = 10 · Expired = 4 · Absent = 0',
       isKnockout: true, allowAttachment: true,
     }),
@@ -93,7 +95,7 @@ const RFI_QUALIFICATION: QuestionnaireTemplate = {
     q(QT1, `${QT1}-sec-2`, 4, 'CAP.CAPACITY', {
       type: 'capacity_declaration', title: 'Monthly capacity in this category',
       helpText: 'Units per month you can reliably supply.',
-      weight: 15, scoringMethod: 'AI_ASSISTED', allowAttachment: true,
+      weight: 20, scoringMethod: 'AI_ASSISTED', allowAttachment: true,
       rubric: 'Assessed against the volume in the demand.',
     }),
     q(QT1, `${QT1}-sec-2`, 5, 'CAP.REFERENCES', {
@@ -110,14 +112,15 @@ const RFI_QUALIFICATION: QuestionnaireTemplate = {
     }),
     q(QT1, `${QT1}-sec-3`, 7, 'SUS.POLICY', {
       type: 'file_upload', title: 'Environmental policy',
-      helpText: 'Current signed policy.', weight: 5, allowAttachment: true,
+      helpText: 'Current signed policy.', weight: 10, allowAttachment: true,
       rubric: 'Present and current = 10 · Present but stale = 5 · Absent = 0',
     }),
     q(QT1, `${QT1}-sec-3`, 8, 'SUS.SCOPE12', {
       type: 'yes_no', title: 'Do you report Scope 1 and 2 emissions?',
-      helpText: '', weight: 5, scoringMethod: 'RULE', rubric: 'Yes = 10 · No = 0',
+      helpText: '', weight: 10, scoringMethod: 'RULE', rubric: 'Yes = 10 · No = 0',
     }),
   ],
+  scoreScale: 100,
   status: 'PUBLISHED',
   version: 3,
   scopeType: 'TENANT',
@@ -141,14 +144,18 @@ const RFP_TECHNICAL: QuestionnaireTemplate = {
   appliesTo: ['RFP'],
   categories: [],
   sections: [
-    { id: `${QT2}-sec-1`, name: 'Company & compliance', sequence: 1 },
-    { id: `${QT2}-sec-2`, name: 'Method & delivery', sequence: 2 },
-    { id: `${QT2}-sec-3`, name: 'Commercial terms', sequence: 3 },
+    { id: `${QT2}-sec-1`, name: 'Company & compliance', sequence: 1, weight: 20, askedPer: 'VENDOR' },
+    { id: `${QT2}-sec-2`, name: 'Method & delivery', sequence: 2, weight: 40, askedPer: 'VENDOR' },
+    // Asked once for every line in the basket. Lead time on a laptop is not
+    // lead time on a pallet of paper, and one number for the whole basket is
+    // the slowest line pretending to be an average.
+    { id: `${QT2}-sec-4`, name: 'Per item commitments', sequence: 3, weight: 15, askedPer: 'LINE' },
+    { id: `${QT2}-sec-3`, name: 'Commercial terms', sequence: 4, weight: 25, askedPer: 'VENDOR' },
   ],
   questions: [
     q(QT2, `${QT2}-sec-1`, 1, 'CO.ISO9001', {
       type: 'certificate', title: 'ISO 9001 certification',
-      helpText: 'Carried from RFI where already supplied.', weight: 10,
+      helpText: 'Carried from RFI where already supplied.', weight: 15,
       rubric: 'Valid = 10 · Expired = 4 · Absent = 0',
       isKnockout: true, allowAttachment: true,
     }),
@@ -169,10 +176,11 @@ const RFP_TECHNICAL: QuestionnaireTemplate = {
       weight: 10, scoringMethod: 'AI_ASSISTED', allowAttachment: true,
       rubric: 'Assessed against the volume in the demand.',
     }),
-    q(QT2, `${QT2}-sec-2`, 5, 'MTH.LEADTIME', {
-      type: 'lead_time', title: 'Standard lead time from order to delivery',
-      helpText: 'Calendar days.', weight: 15, scoringMethod: 'RULE',
+    q(QT2, `${QT2}-sec-4`, 5, 'MTH.LEADTIME', {
+      type: 'lead_time', title: 'Lead time from order to delivery',
+      helpText: 'Calendar days, for this item.', weight: 15, scoringMethod: 'RULE',
       rubric: '≤5 days = 10 · 6–10 = 7 · 11–20 = 4 · >20 = 1',
+      askedPer: 'LINE',
     }),
     q(QT2, `${QT2}-sec-2`, 6, 'MTH.SLA', {
       type: 'matrix_rating', title: 'Service levels offered',
@@ -189,15 +197,16 @@ const RFP_TECHNICAL: QuestionnaireTemplate = {
     q(QT2, `${QT2}-sec-3`, 7, 'COM.PAYTERMS', {
       type: 'currency_payment_terms', title: 'Payment terms offered',
       helpText: 'Days from invoice.', envelope: 'COMMERCIAL',
-      weight: 10, scoringMethod: 'RULE', rubric: 'Longer credit scores higher; advance scores nothing.',
+      weight: 15, scoringMethod: 'RULE', rubric: 'Longer credit scores higher; advance scores nothing.',
       config: choices('payment-terms', QT2, 7),
     }),
     q(QT2, `${QT2}-sec-3`, 8, 'COM.WARRANTY', {
       type: 'short_text', title: 'Returns and defect policy',
-      helpText: '', envelope: 'COMMERCIAL', isRequired: false, weight: 5,
+      helpText: '', envelope: 'COMMERCIAL', isRequired: false, weight: 10,
       rubric: 'Assessed on clarity and coverage.',
     }),
   ],
+  scoreScale: 100,
   status: 'PUBLISHED',
   version: 4,
   scopeType: 'TENANT',
@@ -221,8 +230,8 @@ const RFQ_COMMERCIAL: QuestionnaireTemplate = {
   appliesTo: ['RFQ', 'AUCTION'],
   categories: [],
   sections: [
-    { id: `${QT3}-sec-1`, name: 'Pricing', sequence: 1 },
-    { id: `${QT3}-sec-2`, name: 'Commercial terms', sequence: 2 },
+    { id: `${QT3}-sec-1`, name: 'Pricing', sequence: 1, weight: 20, askedPer: 'VENDOR' },
+    { id: `${QT3}-sec-2`, name: 'Commercial terms', sequence: 2, weight: 80, askedPer: 'VENDOR' },
   ],
   questions: [
     q(QT3, `${QT3}-sec-1`, 1, 'COM.PRICES', {
@@ -233,22 +242,23 @@ const RFQ_COMMERCIAL: QuestionnaireTemplate = {
     q(QT3, `${QT3}-sec-1`, 2, 'COM.VALIDITY', {
       type: 'number', title: 'Price validity, in days',
       helpText: 'From the submission deadline.', envelope: 'COMMERCIAL',
-      weight: 5, scoringMethod: 'RULE', rubric: '≥90 = 10 · 60–89 = 7 · 30–59 = 4 · <30 = 1',
+      weight: 20, scoringMethod: 'RULE', rubric: '≥90 = 10 · 60–89 = 7 · 30–59 = 4 · <30 = 1',
       config: { min: 1, max: 365, unit: 'days', decimals: 0 },
     }),
     q(QT3, `${QT3}-sec-2`, 3, 'COM.PAYTERMS', {
       type: 'currency_payment_terms', title: 'Payment terms offered',
       helpText: 'Days from invoice.', envelope: 'COMMERCIAL',
-      weight: 10, scoringMethod: 'RULE', rubric: 'Longer credit scores higher; advance scores nothing.',
+      weight: 50, scoringMethod: 'RULE', rubric: 'Longer credit scores higher; advance scores nothing.',
       config: choices('payment-terms', QT3, 3),
     }),
     q(QT3, `${QT3}-sec-2`, 4, 'COM.INCOTERM', {
       type: 'single_choice', title: 'Incoterm offered',
-      helpText: '', envelope: 'COMMERCIAL', weight: 5, scoringMethod: 'RULE',
+      helpText: '', envelope: 'COMMERCIAL', weight: 30, scoringMethod: 'RULE',
       rubric: 'Scored on how much of the landed cost the supplier carries.',
       config: choices('incoterms', QT3, 4),
     }),
   ],
+  scoreScale: 100,
   status: 'PUBLISHED',
   version: 2,
   scopeType: 'TENANT',
@@ -272,18 +282,18 @@ const NEGOTIATION_CONFIRM: QuestionnaireTemplate = {
   appliesTo: ['NEGOTIATION'],
   categories: ['Indirect'],
   sections: [
-    { id: `${QT4}-sec-1`, name: 'Revised position', sequence: 1 },
+    { id: `${QT4}-sec-1`, name: 'Revised position', sequence: 1, weight: 100, askedPer: 'VENDOR' },
   ],
   questions: [
     q(QT4, `${QT4}-sec-1`, 1, 'NEG.CONCESSION', {
       type: 'long_text', title: 'What has changed in this offer, and why',
-      helpText: 'Against your previous submission.', weight: 10,
+      helpText: 'Against your previous submission.', weight: 60,
       rubric: 'Scored on the substance of the movement, not its length.',
     }),
     q(QT4, `${QT4}-sec-1`, 2, 'COM.PAYTERMS', {
       type: 'currency_payment_terms', title: 'Payment terms offered',
       helpText: 'Restate, including any change.', envelope: 'COMMERCIAL',
-      weight: 10, scoringMethod: 'RULE', rubric: 'Longer credit scores higher; advance scores nothing.',
+      weight: 40, scoringMethod: 'RULE', rubric: 'Longer credit scores higher; advance scores nothing.',
       config: choices('payment-terms', QT4, 2),
     }),
     q(QT4, `${QT4}-sec-1`, 3, 'NEG.VALIDITY', {
@@ -291,6 +301,7 @@ const NEGOTIATION_CONFIRM: QuestionnaireTemplate = {
       helpText: '', envelope: 'COMMERCIAL', weight: 0, scoringMethod: 'NONE', maxScore: 0,
     }),
   ],
+  scoreScale: 100,
   status: 'PUBLISHED',
   version: 1,
   scopeType: 'CATEGORY',
@@ -314,7 +325,10 @@ const BROKEN_DRAFT: QuestionnaireTemplate = {
   appliesTo: ['RFI', 'RFQ'],
   categories: [],
   sections: [
-    { id: `${QT5}-sec-1`, name: 'Everything', sequence: 1 },
+    // Deliberately 20 rather than 100: this draft exists to give validation
+    // real work, and shares that do not add up is now one of the things it
+    // has to catch.
+    { id: `${QT5}-sec-1`, name: 'Everything', sequence: 1, weight: 20, askedPer: 'VENDOR' },
   ],
   questions: [
     q(QT5, `${QT5}-sec-1`, 1, 'CO.YEARS', {
@@ -340,6 +354,7 @@ const BROKEN_DRAFT: QuestionnaireTemplate = {
       isRequired: false, weight: 15, scoringMethod: 'NONE', maxScore: 0,
     }),
   ],
+  scoreScale: 100,
   status: 'DRAFT',
   version: 1,
   scopeType: 'TENANT',
@@ -371,8 +386,8 @@ const LOGISTICS_HANDLING: QuestionnaireTemplate = {
   appliesTo: ['RFQ'],
   categories: ['Logistics'],
   sections: [
-    { id: `${QT6}-sec-1`, name: 'Pricing', sequence: 1 },
-    { id: `${QT6}-sec-2`, name: 'Handling assurance', sequence: 2 },
+    { id: `${QT6}-sec-1`, name: 'Pricing', sequence: 1, weight: 0, askedPer: 'VENDOR' },
+    { id: `${QT6}-sec-2`, name: 'Handling assurance', sequence: 2, weight: 100, askedPer: 'VENDOR' },
   ],
   questions: [
     q(QT6, `${QT6}-sec-1`, 1, 'LOG.PRICES', {
@@ -389,7 +404,7 @@ const LOGISTICS_HANDLING: QuestionnaireTemplate = {
     q(QT6, `${QT6}-sec-2`, 3, 'LOG.POOL', {
       type: 'single_choice', title: 'Pallet supply model',
       helpText: 'An exchange pool and an outright sale are not comparable on unit price alone.',
-      envelope: 'TECHNICAL', weight: 20, scoringMethod: 'MANUAL',
+      envelope: 'TECHNICAL', weight: 60, scoringMethod: 'MANUAL',
       rubric: 'Exchange pool with collection = 10 · exchange without collection = 6 · outright sale = 3',
       config: {
         options: [
@@ -402,11 +417,12 @@ const LOGISTICS_HANDLING: QuestionnaireTemplate = {
     q(QT6, `${QT6}-sec-2`, 4, 'LOG.RETURN', {
       type: 'number', title: 'Collection lead time for returned pallets, in days',
       helpText: 'From the call-off being raised.',
-      envelope: 'TECHNICAL', weight: 15, scoringMethod: 'RULE',
+      envelope: 'TECHNICAL', weight: 40, scoringMethod: 'RULE',
       rubric: '≤2 = 10 · 3–5 = 7 · 6–10 = 4 · >10 = 1',
       config: { min: 0, max: 60, unit: 'days', decimals: 0 },
     }),
   ],
+  scoreScale: 100,
   status: 'PUBLISHED',
   version: 1,
   scopeType: 'CATEGORY',

@@ -182,28 +182,50 @@ describe('the Terms step of the wizard', () => {
     expect(html).toContain('Payment terms — Net 30 from goods receipt');
   });
 
-  it('shows a grid of which ask carries which document', () => {
+  it('shows a grid of which stage carries which term set', () => {
     const html = paintStep();
-    expect(html).toContain('What each ask carries');
+    expect(html).toContain('Term sets by stage');
     // One column per point the journey asks at.
     for (const label of ['RFI', 'RFP', 'RFQ']) expect(html).toContain(label);
   });
 
-  it('offers the library and a blank document', () => {
+  it('offers the library, a blank set and a supplier preview', () => {
     const html = paintStep();
     expect(html).toContain('Add from library');
     expect(html).toContain('Write my own');
+    expect(html).toContain('Preview as a supplier');
   });
 
-  it('edits the first document, payment figures included where they belong', () => {
+  it('says how terms count, and that they add no second score', () => {
+    const html = paintStep();
+    expect(html).toContain('How terms count');
+    expect(html).toContain('Deviations allowed · 2 sets');
+    expect(html).toContain("Terms don't add a second score");
+  });
+
+  it('edits the first set, payment fields included where they belong', () => {
     const withPaymentOpen: Draft = {
       ...INITIAL_DRAFT,
       terms: [instantiateTerms(payment, 'draft')],
     };
     const html = paintStep(withPaymentOpen);
-    expect(html).toContain('Payment figures');
-    expect(html).toContain('Credit period (days)');
-    expect(html).toContain('Retention released after (days)');
+    expect(html).toContain('Payment, as fields');
+    expect(html).toContain('Credit days');
+    expect(html).toContain('Retention %');
+    // Nothing is retained, so there is no release date to ask for.
+    expect(html).not.toContain('Released after (days)');
+  });
+
+  it('writes the payment clause from the fields', () => {
+    const html = paintStep({ ...INITIAL_DRAFT, terms: [instantiateTerms(payment, 'draft')] });
+    expect(html).toContain('Written from the fields above');
+    expect(html).toContain('Undisputed invoices are settled 30 days from goods receipt. No advance payment; no retention.');
+  });
+
+  it('suggests a library set the event does not carry yet', () => {
+    const html = paintStep();
+    expect(html).toContain('Suggested: Force majeure');
+    expect(html).toContain('Not for this event');
   });
 
   it('blocks on what is missing rather than letting it through', () => {

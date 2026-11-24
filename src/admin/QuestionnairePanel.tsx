@@ -35,18 +35,27 @@ import {
   optionsFromPreset, presetsFor, typeLabel, type QuestionFacet,
 } from '../domain/questionTypes';
 import {
-  POINT_PURPOSE, PRICED_QUESTION_TYPES, TEMPLATE_CUSTOM_KEY, TEMPLATE_STATUS_LABELS,
-  TEMPLATE_WEIGHTING_KEY, VENDOR_INPUT_POINTS, deletionBlock, emptyTemplate, eventsUsing,
-  inheritedCodes, newQuestion, nextTemplateId, normalise, pointLabel, questionsInSection,
-  scoredQuestions, suggestCode, templateUseIndex, templateWeight, templatesFor, validateTemplate,
-  validateWeighting, weightingForJourney, type TemplateUse,
+  POINT_PURPOSE, PRICED_QUESTION_TYPES, QUESTION_SCOPES, SCORE_SCALE_PRESETS, TEMPLATE_CUSTOM_KEY,
+  TEMPLATE_STATUS_LABELS, TEMPLATE_WEIGHTING_KEY, VENDOR_INPUT_POINTS, deletionBlock,
+  emptyTemplate, eventsUsing, inheritedCodes, newQuestion, nextTemplateId, normalise, pointLabel,
+  errorsByQuestion, moveQuestion, moveSection, questionsInSection, removeQuestion, removeSection,
+  scoredQuestions, sectionBudgets, suggestCode, templateUseIndex, weightAfterRemoving,
+  templateWeight, templatesFor, validateTemplate, validateWeighting, weightCeilingFor,
+  weightingForJourney, canAskPerLine, isScoredTemplate, scopeCounts, sectionWeightTotal,
+  setSectionScope,
+  type SectionBudget, type TemplateUse,
 } from '../domain/questionnaireTemplates';
+import { categoriesBySuper } from '../data/procurementCategories';
+import { QuestionnaireAgentPanel } from './QuestionnaireAgentPanel';
+import { QuestionnaireImportDrawer } from './QuestionnaireImport';
+import { QuestionnairePreview } from './QuestionnairePreview';
 import { serverNow } from '../server/clock';
 import { useStore } from '../store/store';
+import { TREATMENT_LABEL, TREATMENT_NOTE, treatmentOf } from '../domain/commercialEvaluation';
 import type {
-  ConfigScopeType, Id, JourneyPatternId, QuestionConfig, QuestionOption, QuestionType,
-  QuestionnaireTemplate, ScoringMethod, StageWeight, TemplateQuestion, TemplateStatus,
-  VendorInputPoint,
+  ConfigScopeType, Id, JourneyPatternId, QuestionConfig, QuestionEvalType, QuestionOption, QuestionType,
+  QuestionScope, QuestionnaireTemplate, ScoringMethod, StageWeight, TemplateQuestion,
+  TemplateSection, TemplateStatus, VendorInputPoint,
 } from '../domain/types';
 
 const SCORING_LABELS: Record<ScoringMethod, string> = {
@@ -57,6 +66,60 @@ const SCORING_LABELS: Record<ScoringMethod, string> = {
   AI_AUTO: 'AI auto — agent writes, degrades below confidence',
 };
 
+/**
+ * Who a question is put to.
+ *
+ * Two radio-like options rather than a checkbox, because "per vendor" is a
+ * real choice and not the absence of one — a buyer who never sees the second
+ * option goes on attaching spreadsheets to question 14. The control disables
+ * itself, with the reason showing, for the types that cannot be repeated per
+ * line: a price schedule already spans the basket, and a section heading asks
+ * for nothing to repeat.
+ */
+export function AskedPerControl({
+  question, sections = [], onChange,
+}: {
+  question: Pick<TemplateQuestion, 'type' | 'askedPer'> & { sectionId?: Id | null };
+  /** When the question sits in one of these, the section decides the grain. */
+  sections?: TemplateSection[];
+  onChange: (patch: { askedPer: QuestionScope }) => void;
+}) {
+  const possible = canAskPerLine(question.type);
+  const section = sections.find((s) => s.id === question.sectionId);
+  const scope: QuestionScope = !possible
+    ? 'VENDOR'
+    : section ? section.askedPer : question.askedPer;
+  // Inside a section the grain belongs to the section, so this reads rather
+  // than writes. Changing it on one question would split a block the supplier
+  // meets as one thing.
+  const locked = !possible || section !== undefined;
+  return (
+    <div>
+      <div style={{ fontSize: 11.5, fontWeight: 600, marginBottom: 5 }}>Asked</div>
+      {/* Shown rather than hidden when it cannot be changed here, so a buyer
+          can see the boundary and read why, instead of wondering where the
+          option went on this one question. */}
+      <div style={locked ? { opacity: 0.55, pointerEvents: 'none' } : undefined}>
+        <Segmented
+          size="small"
+          value={scope}
+          onChange={(askedPer) => !locked && onChange({ askedPer })}
+          options={QUESTION_SCOPES.map((option) => ({ value: option.id, label: option.label }))}
+        />
+      </div>
+      <div style={{ fontSize: 10.5, color: color.textSecondary, marginTop: 4, lineHeight: 1.5 }}>
+        {!possible
+          ? PRICED_QUESTION_TYPES.includes(question.type)
+            ? 'A priced question already spans every line in the basket, so it is asked once.'
+            : 'This type displays something rather than asking for it, so it is not repeated per line.'
+          : section
+            ? `Set on the section — every question in "${section.name}" is asked the same way.`
+            : QUESTION_SCOPES.find((option) => option.id === scope)?.purpose}
+      </div>
+    </div>
+  );
+}
+
 export function QuestionnairePanel({
   scope, lineage,
 }: { scope: ConfigScopeType; lineage: ScopeLineage }) {
@@ -66,6 +129,8 @@ export function QuestionnairePanel({
   const [editing, setEditing] = React.useState<QuestionnaireTemplate | null>(null);
   const [inspecting, setInspecting] = React.useState<string | null>(null);
   const [deleteId, setDeleteId] = React.useState<string | null>(null);
+  /** Whether the builder about to open should land on the upload. */
+  const [startImporting, setStartImporting] = React.useState(false);
   const [journey, setJourney] = React.useState<JourneyPatternId>('JP-05');
 
   const scopeId = scopeIdFor(scope, lineage);
@@ -127,12 +192,13 @@ export function QuestionnairePanel({
     setEditing(null);
   };
 
-  const startNew = () => {
+  const startNew = (importing = false) => {
     if (scopeId === null) return;
     setEditing(emptyTemplate({
       id: nextTemplateId(templates), scopeType: scope, scopeId,
       userId: state.currentUser.id, now: serverNow(),
     }));
+    setStartImporting(importing);
   };
 
   const duplicate = (source: QuestionnaireTemplate) => {
@@ -196,8 +262,9 @@ export function QuestionnairePanel({
           templates={templates}
           uses={uses}
           canAuthor={scopeId !== null}
-          onNew={startNew}
-          onEdit={setEditing}
+          onNew={() => startNew(false)}
+          onUpload={() => startNew(true)}
+          onEdit={(t) => { setStartImporting(false); setEditing(t); }}
           onDuplicate={duplicate}
           onInspect={setInspecting}
           onDelete={setDeleteId}
@@ -214,6 +281,8 @@ export function QuestionnairePanel({
         <TemplateBuilder
           template={editing}
           takenNames={templates.filter((t) => t.id !== editing.id).map((t) => t.name)}
+          library={templates}
+          startImporting={startImporting}
           onChange={setEditing}
           onClose={() => setEditing(null)}
           onSave={saveTemplate}
@@ -460,7 +529,8 @@ function JourneyWeighting({
 
 /** Exported for the library tests, which paint the pane without a click. */
 export function TemplateLibrary({
-  scope, scopeId, templates, uses, canAuthor, onNew, onEdit, onDuplicate, onInspect, onDelete,
+  scope, scopeId, templates, uses, canAuthor, onNew, onUpload, onEdit, onDuplicate, onInspect,
+  onDelete,
 }: {
   scope: ConfigScopeType;
   /**
@@ -473,6 +543,8 @@ export function TemplateLibrary({
   uses: Map<Id, TemplateUse[]>;
   canAuthor: boolean;
   onNew: () => void;
+  /** New template, opened straight into the spreadsheet upload. */
+  onUpload: () => void;
   onEdit: (t: QuestionnaireTemplate) => void;
   onDuplicate: (t: QuestionnaireTemplate) => void;
   onInspect: (id: string) => void;
@@ -614,9 +686,23 @@ export function TemplateLibrary({
       title="Template library"
       hint={`Question sets a buyer picks from. Authored at ${SCOPE_LABELS[scope]} scope and inherited by every narrower scope; a template from a broader scope can be copied but not edited here.`}
       action={
-        <Button variant="primary" size="small" disabled={!canAuthor} onClick={onNew}>
-          New template
-        </Button>
+        <div style={{ display: 'flex', gap: 6 }}>
+          {/* Upload sits beside New rather than inside it. A buyer arriving
+              with the sheet already written should not have to open an empty
+              builder and go looking for the way in. */}
+          <Button
+            variant="secondary"
+            size="small"
+            disabled={!canAuthor}
+            onClick={onUpload}
+            title="Build a template from an Excel or CSV questionnaire"
+          >
+            ⬆ Upload Excel / CSV
+          </Button>
+          <Button variant="primary" size="small" disabled={!canAuthor} onClick={onNew}>
+            New template
+          </Button>
+        </div>
       }
     >
       <Table
@@ -759,22 +845,37 @@ function SectionWeights({ template }: { template: QuestionnaireTemplate }) {
       ))}
       <div style={{ fontSize: 11, color: color.textSecondary, marginTop: 3 }}>
         Total scored weight {templateWeight(template)} across {scored.length} question(s).
+        {(() => {
+          const split = scopeCounts(template.questions);
+          return split.line === 0
+            ? ' Every question is asked once of the vendor.'
+            : ` ${split.line} of them ${split.line === 1 ? 'is' : 'are'} asked once per line in the basket.`;
+        })()}
       </div>
     </div>
   );
 }
 
-function QuestionRow({ question }: { question: TemplateQuestion }) {
+function QuestionRow({
+  question, invalid = false,
+}: {
+  question: TemplateQuestion;
+  /** Carries a blocking error, so the row is outlined rather than only listed. */
+  invalid?: boolean;
+}) {
   const priced = PRICED_QUESTION_TYPES.includes(question.type);
   const format = formatSummary(question);
   return (
     <div
       style={{
-        border: `1px solid ${color.border}`, borderRadius: radius.control, padding: '8px 11px',
+        border: `1px solid ${invalid ? color.danger : color.border}`,
+        background: invalid ? '#fff' : 'transparent',
+        borderRadius: radius.control, padding: '8px 11px',
       }}
     >
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
         <span style={{ fontSize: 11, color: color.textMuted }}>{question.sequence}</span>
+        {invalid && <Chip tone="danger" icon="✕">needs fixing</Chip>}
         <span style={{ fontSize: 12.5, fontWeight: 500 }}>{question.title}</span>
         {question.isRequired && <span style={{ color: color.danger, fontSize: 12 }}>*</span>}
         <Chip tone={question.envelope === 'COMMERCIAL' ? 'purple' : question.envelope === 'TECHNICAL' ? 'info' : 'neutral'}>
@@ -782,6 +883,11 @@ function QuestionRow({ question }: { question: TemplateQuestion }) {
         </Chip>
         <Chip tone="neutral">{typeLabel(question.type)}</Chip>
         {question.isKnockout && <Chip tone="danger" icon="✕">knockout</Chip>}
+        {question.askedPer === 'LINE' && (
+          <Chip tone="brand" icon="▤" title="Asked once for every line in the basket">
+            per line item
+          </Chip>
+        )}
         {priced
           ? <Chip tone="gold" title="Price reaches the score through the price component only">unweighted by rule</Chip>
           : question.weight > 0 && <Chip tone="brand">weight {question.weight}</Chip>}
@@ -827,16 +933,32 @@ function Issues({ validation }: { validation: ReturnType<typeof validateTemplate
 // Builder
 // ---------------------------------------------------------------------------
 
-function TemplateBuilder({
-  template, takenNames, onChange, onClose, onSave,
+/** Exported for the builder tests, which open it without a click. */
+export function TemplateBuilder({
+  template, takenNames, library, startImporting = false, onChange, onClose, onSave,
 }: {
   template: QuestionnaireTemplate;
   takenNames: string[];
+  /** Everything visible at this scope — what the agent retrieves against. */
+  library: QuestionnaireTemplate[];
+  /**
+   * Open straight into the upload. Set when the buyer came in by the library's
+   * Upload button rather than by New template — the builder is still where
+   * the import lands, but making them find the button again would be asking
+   * the same question twice.
+   */
+  startImporting?: boolean;
   onChange: (next: QuestionnaireTemplate) => void;
   onClose: () => void;
   onSave: (t: QuestionnaireTemplate) => void;
 }) {
   const [selectedId, setSelectedId] = React.useState<Id | null>(null);
+  /**
+   * The buyer's two readings of the same thing. Preview is a tab rather than
+   * a separate screen because the question it answers — "is this askable?" —
+   * comes up while editing, not after it.
+   */
+  const [view, setView] = React.useState<'edit' | 'preview'>('edit');
   const validation = validateTemplate(template, takenNames);
 
   const patch = (next: Partial<QuestionnaireTemplate>) => onChange({ ...template, ...next });
@@ -857,12 +979,29 @@ function TemplateBuilder({
         : VENDOR_INPUT_POINTS.filter((p) => p === point || template.appliesTo.includes(p)),
     });
 
+  const budgets = sectionBudgets(template);
+  const questionErrors = errorsByQuestion(validation.errors);
+  const [agentOpen, setAgentOpen] = React.useState(false);
+  const [importOpen, setImportOpen] = React.useState(startImporting);
+  /** The section awaiting confirmation, because removing it removes questions. */
+  const [removingId, setRemovingId] = React.useState<Id | null>(null);
+  const removing = template.sections.find((s) => s.id === removingId) ?? null;
+  const removingQuestions = removing === null ? [] : questionsInSection(template, removing.id);
+
   const addSection = () => {
     const sequence = template.sections.length + 1;
     patch({
       sections: [
         ...template.sections,
-        { id: `${template.id}-sec-${sequence}`, name: `Section ${sequence}`, sequence },
+        // Zero, not a guess: a new section holds nothing, and one that claimed
+        // weight on creation would put the template over budget immediately.
+        {
+          id: `${template.id}-sec-${sequence}`, name: `Section ${sequence}`, sequence,
+          weight: 0,
+          // Per vendor until the buyer says otherwise: most of a questionnaire
+          // is about the company, and the other grain is a decision.
+          askedPer: 'VENDOR',
+        },
       ],
     });
   };
@@ -875,15 +1014,79 @@ function TemplateBuilder({
       onClose={onClose}
       width={720}
       footer={
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-          <Button variant="secondary" onClick={onClose}>Cancel</Button>
-          <Button variant="primary" disabled={!validation.valid} onClick={() => onSave(template)}>
-            Save template
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', gap: 8 }}>
+          <Button
+            variant="secondary"
+            onClick={() => setImportOpen(true)}
+            title="Bring the questions in from an Excel or CSV sheet"
+          >
+            ⬆ Upload
           </Button>
+          <Button
+            variant="secondary"
+            onClick={() => setAgentOpen(true)}
+            disabled={template.categories.length === 0}
+            title={
+              template.categories.length === 0
+                ? 'Pick a category first — the agent drafts against one.'
+                : `Ask AG-03 to draft questions for ${template.categories.join(', ')}`
+            }
+          >
+            ✦ Ask the agent
+          </Button>
+          </div>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            {/*
+              Why the button is off, beside the button.
+              A disabled control carries `pointer-events: none`, so a `title`
+              on it never appears — and the issue list is at the top of a form
+              that is routinely several screens long. The first blocker is
+              printed here so the answer to "why can I not save this?" is
+              where the question gets asked.
+            */}
+            {!validation.valid && (
+              <span
+                style={{
+                  fontSize: 11.5, color: color.dangerText, lineHeight: 1.45,
+                  maxWidth: 360, textAlign: 'right',
+                }}
+              >
+                <strong>✕ Cannot be saved yet — </strong>
+                {validation.errors[0].message}
+                {validation.errors.length > 1 && (
+                  <> And {validation.errors.length - 1} other
+                    {validation.errors.length === 2 ? '' : 's'}, listed at the top of the form.</>
+                )}
+              </span>
+            )}
+            <Button variant="secondary" onClick={onClose}>Cancel</Button>
+            <Button variant="primary" disabled={!validation.valid} onClick={() => onSave(template)}>
+              Save template
+            </Button>
+          </div>
         </div>
       }
     >
       <div className="rfx-stack" style={{ gap: 14 }}>
+        <Segmented
+          value={view}
+          onChange={setView}
+          options={[
+            { value: 'edit' as const, label: 'Edit' },
+            { value: 'preview' as const, label: 'Preview as a supplier' },
+          ]}
+        />
+
+        {view === 'preview' ? (
+          <QuestionnairePreview
+            name={template.name}
+            point={template.appliesTo[0] ?? null}
+            sections={template.sections}
+            questions={template.questions}
+          />
+        ) : (
+        <>
         <Issues validation={validation} />
 
         <Field label="Name" required hint="What a buyer picks from the library.">
@@ -968,22 +1171,52 @@ function TemplateBuilder({
               ))}
             </Select>
           </Field>
-          <Field label="Categories" hint="Comma separated. Empty means every category.">
-            <TextInput
-              value={template.categories.join(', ')}
-              placeholder="Indirect, IT Hardware"
-              onChange={(e) =>
-                patch({
-                  categories: e.target.value.split(',').map((c) => c.trim()).filter(Boolean),
-                })
-              }
+          <Field
+            label="Categories"
+            hint="The categories this template serves. Empty means every category."
+          >
+            <CategoryPicker
+              selected={template.categories}
+              onChange={(categories) => patch({ categories })}
             />
+          </Field>
+          <Field
+            label="Score scale"
+            hint="What section and overall scores are reported out of. Chosen now, because a scale changed later rewrites what every committed score meant."
+          >
+            <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+              <div style={{ width: 90 }}>
+                <NumberInput
+                  value={template.scoreScale}
+                  aria-label="Score scale"
+                  min={1}
+                  invalid={!(template.scoreScale > 0)}
+                  onChange={(e) => patch({ scoreScale: Number(e.target.value) })}
+                />
+              </div>
+              {SCORE_SCALE_PRESETS.map((preset) => (
+                <Button
+                  key={preset}
+                  variant={template.scoreScale === preset ? 'primary' : 'secondary'}
+                  size="small"
+                  onClick={() => patch({ scoreScale: preset })}
+                >
+                  /{preset}
+                </Button>
+              ))}
+            </div>
           </Field>
         </div>
 
-        {/* Questions, grouped by section. */}
-        {template.sections.map((section) => {
+        <SectionTotal template={template} />
+
+        {/* Questions, grouped by section. Each section budgets its own. */}
+        {template.sections.map((section, index) => {
           const questions = questionsInSection(template, section.id);
+          const budget = budgets.find((b) => b.section.id === section.id);
+          const first = index === 0;
+          const last = index === template.sections.length - 1;
+          const onlySection = template.sections.length === 1;
           return (
             <Card
               key={section.id}
@@ -1005,26 +1238,130 @@ function TemplateBuilder({
                   }}
                 />
               }
-              hint={`${questions.length} question(s)`}
+              hint={(() => {
+                // How the section splits between the two scopes, because the
+                // number a supplier actually owes is the line ones multiplied
+                // by the basket, not the question count.
+                const split = scopeCounts(questions);
+                return split.line === 0
+                  ? `${questions.length} question(s)`
+                  : `${questions.length} question(s) · ${split.vendor} per vendor, ${split.line} per line item`;
+              })()}
               action={
-                <Button variant="secondary" size="small" onClick={() => addQuestion(section.id)}>
-                  ＋ Question
-                </Button>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  {/* The grain the whole section runs at. Its questions follow
+                      it, so a supplier meets one coherent block rather than a
+                      form that switches grain row by row. */}
+                  <Segmented
+                    size="small"
+                    value={section.askedPer}
+                    onChange={(askedPer) => onChange(setSectionScope(template, section.id, askedPer))}
+                    options={QUESTION_SCOPES.map((o) => ({ value: o.id, label: o.label }))}
+                  />
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span style={{ fontSize: 11.5, color: color.textSecondary, whiteSpace: 'nowrap' }}>
+                      Section weight
+                    </span>
+                    <div style={{ width: 74 }}>
+                      <NumberInput
+                        value={section.weight}
+                        aria-label={`Section weight — ${section.name}`}
+                        min={0}
+                        invalid={budget?.overspent}
+                        onChange={(e) =>
+                          patch({
+                            sections: template.sections.map((s) =>
+                              s.id === section.id
+                                ? { ...s, weight: Math.max(0, Number(e.target.value)) }
+                                : s,
+                            ),
+                          })
+                        }
+                      />
+                    </div>
+                  </label>
+                  <Button variant="secondary" size="small" onClick={() => addQuestion(section.id)}>
+                    ＋ Question
+                  </Button>
+                  {/* Order and removal, grouped away from the settings so the
+                      destructive one is not sitting next to the weight box. */}
+                  <span style={{ display: 'flex', gap: 2, marginLeft: 2 }}>
+                    <Button
+                      variant="icon"
+                      size="small"
+                      aria-label={`Move ${section.name} up`}
+                      title={first ? 'Already the first section' : `Move "${section.name}" above "${template.sections[index - 1].name}"`}
+                      disabled={first}
+                      onClick={() => onChange(moveSection(template, section.id, -1))}
+                    >
+                      ▲
+                    </Button>
+                    <Button
+                      variant="icon"
+                      size="small"
+                      aria-label={`Move ${section.name} down`}
+                      title={last ? 'Already the last section' : `Move "${section.name}" below "${template.sections[index + 1].name}"`}
+                      disabled={last}
+                      onClick={() => onChange(moveSection(template, section.id, 1))}
+                    >
+                      ▼
+                    </Button>
+                    <Button
+                      variant="icon"
+                      size="small"
+                      aria-label={`Remove section ${section.name}`}
+                      title={
+                        onlySection
+                          ? 'The questions have to live somewhere — add another section before removing this one.'
+                          : questions.length === 0
+                            ? `Remove "${section.name}"`
+                            : `Remove "${section.name}" and the ${questions.length} question(s) in it`
+                      }
+                      disabled={onlySection}
+                      onClick={() => {
+                        // An empty section goes without ceremony; one holding
+                        // questions asks, because the questions go with it.
+                        if (questions.length === 0) onChange(removeSection(template, section.id));
+                        else setRemovingId(section.id);
+                      }}
+                    >
+                      🗑
+                    </Button>
+                  </span>
+                </div>
               }
             >
+              {budget && <BudgetMeter budget={budget} />}
               {questions.length === 0 ? (
                 <div style={{ padding: '16px 14px', fontSize: 12, color: color.textMuted }}>
                   No questions in this section yet.
                 </div>
               ) : (
                 <div>
-                  {questions.map((question, i) => (
+                  {questions.map((question, i) => {
+                  /**
+                   * Which question is stopping the save, marked on the
+                   * question.
+                   *
+                   * The error list at the top of the form says what is wrong;
+                   * it cannot say *where* in a thirty-question import. A red
+                   * edge and the reason in place is the difference between
+                   * reading an error and finding it.
+                   */
+                  const faults = questionErrors.get(question.id) ?? [];
+                  const broken = faults.length > 0;
+                  return (
                     <div
                       key={question.id}
                       style={{
                         borderTop: i === 0 ? 'none' : `1px solid ${color.border}`,
-                        borderLeft: `3px solid ${selectedId === question.id ? color.brandPrimary : 'transparent'}`,
-                        background: selectedId === question.id ? '#F5F8FF' : '#fff',
+                        borderLeft: `3px solid ${
+                          broken ? color.dangerText
+                            : selectedId === question.id ? color.brandPrimary : 'transparent'
+                        }`,
+                        background: broken
+                          ? color.dangerSoft
+                          : selectedId === question.id ? '#F5F8FF' : '#fff',
                         padding: '9px 12px',
                       }}
                     >
@@ -1037,29 +1374,81 @@ function TemplateBuilder({
                             background: 'none', cursor: 'pointer', padding: 0,
                           }}
                         >
-                          <QuestionRow question={question} />
+                          <QuestionRow question={question} invalid={broken} />
                         </button>
+                        {/* The order the supplier meets them in. An uploaded
+                            sheet arrives in the order it was written, which is
+                            usually right and occasionally not. */}
+                        <Button
+                          variant="icon"
+                          size="small"
+                          aria-label={`Move ${question.code} up`}
+                          title={i === 0 ? 'Already first in this section' : 'Ask this earlier'}
+                          disabled={i === 0}
+                          onClick={() => onChange(moveQuestion(template, question.id, -1))}
+                        >
+                          ▲
+                        </Button>
+                        <Button
+                          variant="icon"
+                          size="small"
+                          aria-label={`Move ${question.code} down`}
+                          title={i === questions.length - 1 ? 'Already last in this section' : 'Ask this later'}
+                          disabled={i === questions.length - 1}
+                          onClick={() => onChange(moveQuestion(template, question.id, 1))}
+                        >
+                          ▼
+                        </Button>
                         <Button
                           variant="icon"
                           size="small"
                           aria-label={`Remove ${question.title}`}
-                          onClick={() =>
-                            patch({ questions: template.questions.filter((q) => q.id !== question.id) })
-                          }
+                          // Says in advance what removing it does to the
+                          // section, because the weight moving is the part
+                          // nobody expects.
+                          title={(() => {
+                            const shift = weightAfterRemoving(template, question.id);
+                            return shift === null
+                              ? `Remove ${question.code}`
+                              : `Remove ${question.code} — "${shift.section.name}" drops from ${shift.from}% to ${shift.to}%, since the section can no longer award what this question carried`;
+                          })()}
+                          onClick={() => {
+                            if (selectedId === question.id) setSelectedId(null);
+                            onChange(removeQuestion(template, question.id));
+                          }}
                         >
                           ✕
                         </Button>
                       </div>
 
+                      {broken && (
+                        <div className="rfx-stack" style={{ gap: 3, marginTop: 6 }}>
+                          {faults.map((fault, f) => (
+                            <div
+                              key={f}
+                              style={{
+                                fontSize: 11.5, color: color.dangerText, lineHeight: 1.5,
+                                display: 'flex', gap: 6,
+                              }}
+                            >
+                              <span aria-hidden style={{ fontWeight: 700 }}>✕</span>
+                              <span>{fault.message}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
                       {selectedId === question.id && (
                         <QuestionEditor
                           question={question}
                           sections={template.sections}
+                          ceiling={weightCeilingFor(template, question.id)}
                           onChange={(next) => patchQuestion(question.id, next)}
                         />
                       )}
                     </div>
-                  ))}
+                  );
+                  })}
                 </div>
               )}
             </Card>
@@ -1067,16 +1456,238 @@ function TemplateBuilder({
         })}
 
         <Button variant="secondary" onClick={addSection}>＋ Add section</Button>
+        </>
+        )}
       </div>
+
+      <QuestionnaireAgentPanel
+        open={agentOpen}
+        template={template}
+        library={library}
+        onClose={() => setAgentOpen(false)}
+        onApply={onChange}
+      />
+
+      <Modal
+        open={removing !== null}
+        title={removing === null ? '' : `Remove "${removing.name}"?`}
+        onClose={() => setRemovingId(null)}
+        onConfirm={() => {
+          if (removing !== null) onChange(removeSection(template, removing.id));
+          setRemovingId(null);
+        }}
+        confirmLabel="Remove the section"
+        confirmTone="destructive"
+      >
+        <div style={{ fontSize: 12.5, lineHeight: 1.65, color: color.textBody }}>
+          The {removingQuestions.length} question(s) in it go too
+          {removingQuestions.length > 0 && (
+            <> — {removingQuestions.map((q) => q.code).join(', ')}</>
+          )}
+          . To keep any of them, close this and move them to another section
+          first: each question's own <strong>Section</strong> field does that
+          without losing what has been written.
+          {removing !== null && removing.weight > 0 && (
+            <> Its {removing.weight}% goes back on the table, so the remaining sections will
+            need to be raised to total 100% again.</>
+          )}
+        </div>
+      </Modal>
+
+      <QuestionnaireImportDrawer
+        open={importOpen}
+        template={template}
+        takenNames={takenNames}
+        onClose={() => setImportOpen(false)}
+        onApply={(next) => {
+          onChange(next);
+          setImportOpen(false);
+          // Back to the edit tab rather than the preview: the first thing
+          // anyone does after an upload is look at what arrived.
+          setView('edit');
+          setSelectedId(null);
+        }}
+      />
     </Drawer>
   );
 }
 
-function QuestionEditor({
-  question, sections, onChange,
+/**
+ * Choosing the categories a template serves.
+ *
+ * A closed list, not free text. "IT Hardware" and "IT hardware" are two
+ * different categories as far as every lookup in this system is concerned —
+ * the shortlist, the questionnaire and the spend report would each resolve a
+ * different one and none of them would say so. The picker also makes the
+ * question answerable: a buyer who has to type a category has to already know
+ * what this organisation calls it.
+ */
+function CategoryPicker({
+  selected, onChange,
+}: { selected: string[]; onChange: (next: string[]) => void }) {
+  const groups = categoriesBySuper();
+  const unpicked = groups
+    .map((group) => ({
+      ...group,
+      items: group.items.filter((item) => !selected.includes(item.id)),
+    }))
+    .filter((group) => group.items.length > 0);
+
+  return (
+    <div className="rfx-stack" style={{ gap: 7 }}>
+      <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>
+        {selected.length === 0 ? (
+          <span style={{ fontSize: 11.5, color: color.textMuted }}>
+            Every category — this template is offered wherever it applies.
+          </span>
+        ) : (
+          selected.map((id) => (
+            <button
+              key={id}
+              type="button"
+              aria-label={`Remove category ${id}`}
+              onClick={() => onChange(selected.filter((each) => each !== id))}
+              style={{
+                border: `1px solid ${color.brandPrimaryTint}`, background: color.brandPrimarySoft,
+                color: color.brandPrimary, borderRadius: radius.pill, cursor: 'pointer',
+                padding: '3px 9px', fontSize: 11.5, fontWeight: 600,
+              }}
+            >
+              {id} ✕
+            </button>
+          ))
+        )}
+      </div>
+      <Select
+        value=""
+        aria-label="Add a category"
+        onChange={(e) => {
+          if (e.target.value === '') return;
+          onChange([...selected, e.target.value]);
+        }}
+      >
+        <option value="">Add a category…</option>
+        {unpicked.map((group) => (
+          <optgroup key={group.superCategory} label={group.superCategory}>
+            {group.items.map((item) => (
+              <option key={item.id} value={item.id}>{item.id} — {item.description}</option>
+            ))}
+          </optgroup>
+        ))}
+      </Select>
+    </div>
+  );
+}
+
+/**
+ * The shares, added up.
+ *
+ * Sections are percentages of one technical score, so the only interesting
+ * number is the distance from 100. Shown above the sections rather than
+ * beneath them, because it is the constraint a buyer is working inside while
+ * they type the individual figures, not a verdict delivered afterwards.
+ */
+function SectionTotal({ template }: { template: QuestionnaireTemplate }) {
+  if (!isScoredTemplate(template)) {
+    return (
+      <div style={{ fontSize: 11.5, color: color.textSecondary }}>
+        Nothing is weighted, so this template gathers information without contributing to the
+        ranking. Give a section a share to start scoring with it.
+      </div>
+    );
+  }
+  const total = sectionWeightTotal(template);
+  const off = total - 100;
+  const tone = off === 0 ? color.successText : off > 0 ? color.dangerText : color.warningText;
+  return (
+    <div
+      style={{
+        display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap',
+        border: `1px solid ${off === 0 ? color.border : tone}`,
+        background: off === 0 ? color.successSoft : off > 0 ? color.dangerSoft : color.warningSoft,
+        borderRadius: radius.control, padding: '8px 12px',
+      }}
+    >
+      <strong style={{ fontSize: 12.5, color: tone }}>
+        Sections total {total}% of 100%
+      </strong>
+      <span style={{ fontSize: 11.5, color: color.textSecondary, flex: 1, minWidth: 180 }}>
+        {off === 0
+          ? 'Every share is accounted for. A section\u2019s weight is the share of the technical score it carries.'
+          : off > 0
+            ? `${off}% more score than there is to give — lower a section.`
+            : `${-off}% is unaccounted for — raise a section, or add the one that is missing.`}
+      </span>
+      <div
+        aria-hidden
+        style={{
+          width: 140, height: 6, borderRadius: 3, background: color.border, overflow: 'hidden',
+        }}
+      >
+        <div style={{ width: `${Math.min(100, total)}%`, height: '100%', background: tone }} />
+      </div>
+    </div>
+  );
+}
+
+/**
+ * How much of a section's budget its questions have spent.
+ *
+ * A bar rather than two numbers because the question a buyer is actually
+ * asking is "have I got room for another question here", and a bar answers it
+ * without arithmetic. Over budget is drawn past the end in red rather than
+ * clipped at full — a meter that pins at 100% hides exactly the state that
+ * needs fixing.
+ */
+function BudgetMeter({ budget }: { budget: SectionBudget }) {
+  const pct = budget.declared === 0
+    ? (budget.allocated > 0 ? 100 : 0)
+    : Math.min(100, (budget.allocated / budget.declared) * 100);
+  const tone = budget.overspent ? color.danger
+    : budget.remaining > 0 ? color.warning
+    : color.success;
+
+  return (
+    <div
+      style={{
+        display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px',
+        borderBottom: `1px solid ${color.border}`, background: color.rowAlt,
+      }}
+    >
+      <div
+        style={{
+          flex: 1, height: 6, borderRadius: radius.pill, background: color.neutralSoft,
+          overflow: 'hidden', minWidth: 60,
+        }}
+      >
+        <div style={{ width: `${pct}%`, height: '100%', background: tone }} />
+      </div>
+      <span style={{ fontSize: 11.5, color: color.textSecondary, whiteSpace: 'nowrap' }}>
+        {budget.allocated} of {budget.declared} allocated
+      </span>
+      {budget.overspent ? (
+        <Chip tone="danger" icon="✕">{-budget.remaining} over</Chip>
+      ) : budget.declared === 0 ? (
+        <Chip tone="neutral">not scored</Chip>
+      ) : budget.remaining > 0 ? (
+        <Chip tone="gold">{budget.remaining} unspent</Chip>
+      ) : (
+        <Chip tone="brand">fully allocated</Chip>
+      )}
+    </div>
+  );
+}
+
+export function QuestionEditor({
+  question, sections, ceiling, onChange,
 }: {
   question: TemplateQuestion;
   sections: QuestionnaireTemplate['sections'];
+  /**
+   * The most weight this question may take before its section is over budget.
+   * Null when it belongs to no section, so no budget constrains it.
+   */
+  ceiling: number | null;
   onChange: (next: Partial<TemplateQuestion>) => void;
 }) {
   const priced = PRICED_QUESTION_TYPES.includes(question.type);
@@ -1088,14 +1699,35 @@ function QuestionEditor({
         gap: 12, marginTop: 10, paddingTop: 11, borderTop: `1px dashed ${color.borderStrong}`,
       }}
     >
+      {/*
+        The code comes first and the question text is given the whole width.
+        The code is the identifier a buyer works from — it is what the
+        spreadsheet calls the row, what the evaluation screen cites and what
+        carries an answer from RFI into RFP — so it reads first, short and
+        exact. The question itself is prose and routinely runs past a line: on
+        one line of a four-up grid it was being written to fit the box rather
+        than to be understood by a supplier.
+      */}
+      <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+        <div style={{ width: 130 }}>
+          <Field label="Code" hint="Reuse across stages to carry the answer forward.">
+            <TextInput value={question.code} onChange={(e) => onChange({ code: e.target.value })} />
+          </Field>
+        </div>
+        <div style={{ flex: 1, minWidth: 220 }}>
+          <Field label="Question" required hint="What the supplier reads, in full.">
+            <Textarea
+              rows={2}
+              value={question.title}
+              placeholder="e.g. Describe your quality management system and the standards it is certified to."
+              onChange={(e) => onChange({ title: e.target.value })}
+            />
+          </Field>
+        </div>
+      </div>
+
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(190px, 100%), 1fr))', gap: 10 }}>
-        <Field label="Title" required>
-          <TextInput value={question.title} onChange={(e) => onChange({ title: e.target.value })} />
-        </Field>
-        <Field label="Code" hint="Reuse a code across stages to carry the answer forward.">
-          <TextInput value={question.code} onChange={(e) => onChange({ code: e.target.value })} />
-        </Field>
-        <Field label="Type" hint={QUESTION_TYPE_SPEC[question.type].asks}>
+        <Field label="Response type" hint={QUESTION_TYPE_SPEC[question.type].asks}>
           <Select
             value={question.type}
             onChange={(e) => {
@@ -1135,30 +1767,50 @@ function QuestionEditor({
 
       <AnswerFormat question={question} onChange={onChange} />
 
-      <div>
-        <div style={{ fontSize: 11.5, fontWeight: 600, marginBottom: 5 }}>Envelope</div>
-        <Segmented
-          size="small"
-          value={question.envelope}
-          onChange={(envelope) => onChange({ envelope })}
-          options={[
-            { value: 'TECHNICAL' as const, label: 'Technical' },
-            { value: 'COMMERCIAL' as const, label: 'Commercial' },
-            { value: 'GENERAL' as const, label: 'General' },
-          ]}
-        />
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(220px, 100%), 1fr))', gap: 12 }}>
+        <div>
+          <div style={{ fontSize: 11.5, fontWeight: 600, marginBottom: 5 }}>Envelope</div>
+          <Segmented
+            size="small"
+            value={question.envelope}
+            onChange={(envelope) => onChange({ envelope })}
+            options={[
+              { value: 'TECHNICAL' as const, label: 'Technical' },
+              { value: 'COMMERCIAL' as const, label: 'Commercial' },
+              { value: 'GENERAL' as const, label: 'General' },
+            ]}
+          />
+        </div>
+        <AskedPerControl question={question} sections={sections} onChange={onChange} />
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(190px, 100%), 1fr))', gap: 10 }}>
         <Field
           label="Weight"
-          hint={priced ? 'A priced question carries no weight, by rule.' : 'Relative, not a percentage.'}
+          hint={
+            priced ? 'A priced question carries no weight, by rule.'
+              : ceiling === null ? 'This question is in no section, so no budget caps it.'
+              : `Allocated from this section. ${ceiling} available to this question.`
+          }
           lockedBy={priced ? 'the price rule' : undefined}
         >
           <NumberInput
             value={question.weight}
             disabled={priced}
-            onChange={(e) => onChange({ weight: Math.max(0, Number(e.target.value)) })}
+            max={ceiling ?? undefined}
+            onChange={(e) =>
+              // Clamped to the section's remaining budget rather than accepted
+              // and then reported as an error: an over-budget section is a
+              // state the buyer should not be able to author in the first
+              // place. The validation still catches it, for templates that
+              // arrive by any other door.
+              onChange({
+                weight: Math.min(
+                  Math.max(0, Number(e.target.value)),
+                  ceiling ?? Number.POSITIVE_INFINITY,
+                ),
+              })
+            }
           />
         </Field>
         <Field label="Scoring method">
@@ -1181,6 +1833,32 @@ function QuestionEditor({
           onChange={(e) => onChange({ rubric: e.target.value || null })}
         />
       </Field>
+
+      {question.envelope === 'COMMERCIAL' && !priced && (
+        <Field
+          label="How evaluation treats the answer"
+          hint={TREATMENT_NOTE[treatmentOf(question)]}
+        >
+          <Select
+            aria-label="Evaluation type"
+            value={question.evalType ?? ''}
+            onChange={(e) => {
+              const evalType = (e.target.value || undefined) as QuestionEvalType | undefined;
+              // A knockout is a gate, not a weight: the two settings may not disagree.
+              onChange({
+                evalType,
+                ...(evalType === 'KO' ? { isKnockout: true } : question.evalType === 'KO' ? { isKnockout: false } : {}),
+                ...(evalType === 'MONETISED' || evalType === 'INFO' || evalType === 'LOADING' ? { weight: 0 } : {}),
+              });
+            }}
+          >
+            <option value="">Automatic — worked out from the question</option>
+            {(['SCORED', 'KO', 'MONETISED', 'LOADING', 'PREFERENCE', 'INFO'] as QuestionEvalType[]).map((t) => (
+              <option key={t} value={t}>{TREATMENT_LABEL[t]}</option>
+            ))}
+          </Select>
+        </Field>
+      )}
 
       <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
         <Toggle

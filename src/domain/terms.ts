@@ -89,6 +89,14 @@ export const ACKNOWLEDGEMENT_LABEL: Record<Acknowledgement, string> = {
   SIGN_AND_RETURN: 'Must sign and return the document',
 };
 
+/** The same, as short as a chip in a table row can hold. */
+export const ACKNOWLEDGEMENT_SHORT: Record<Acknowledgement, string> = {
+  NONE: 'Read only',
+  ACCEPT: 'Accept to submit',
+  ACCEPT_OR_DEVIATE: 'Accept or deviate',
+  SIGN_AND_RETURN: 'Sign and return',
+};
+
 export interface TermsClause {
   id: Id;
   /** The reference a buyer and a supplier will both cite: "3.1". */
@@ -97,6 +105,11 @@ export interface TermsClause {
   text: string;
   /** A deviation here is a rejection, not a negotiation. */
   nonNegotiable: boolean;
+  /**
+   * The text is written from the payment figures rather than typed, so the
+   * clause a supplier reads can never say 45 days while the field says 30.
+   */
+  fromPaymentFields?: boolean;
 }
 
 export type PaymentTrigger = 'INVOICE' | 'GRN' | 'MILESTONE' | 'DELIVERY';
@@ -154,6 +167,10 @@ export interface TermsDocument {
   allowDeviation: boolean;
   /** Set when the terms are a file rather than clauses typed here. */
   attachmentName: string | null;
+  /** A file kept with the terms for the buyer's side only. Never sent to a supplier. */
+  internalAttachmentName?: string | null;
+  /** The line a buyer recognises the set by: "DDP to the named site". */
+  summary?: string;
   clauses: TermsClause[];
   /** Set on a payment document. Null on every other category. */
   payment: PaymentTerms | null;
@@ -177,6 +194,9 @@ export interface TermsTemplate {
   allowDeviation: boolean;
   clauses: Omit<TermsClause, 'id'>[];
   payment?: PaymentTerms;
+  summary?: string;
+  /** Why the library offers this set to an event that does not carry it yet. */
+  suggestedBecause?: string;
 }
 
 /**
@@ -198,7 +218,13 @@ export function instantiateTerms(
     acknowledgement: template.acknowledgement,
     allowDeviation: template.allowDeviation,
     attachmentName: null,
-    clauses: template.clauses.map((clause, i) => ({ ...clause, id: `${idPrefix}-${template.id}-c${i + 1}` })),
+    internalAttachmentName: null,
+    summary: template.summary,
+    clauses: template.clauses.map((clause, i) => ({
+      ...clause,
+      id: `${idPrefix}-${template.id}-c${i + 1}`,
+      text: clause.fromPaymentFields && template.payment ? paymentClauseText(template.payment) : clause.text,
+    })),
     payment: template.payment ? { ...template.payment } : null,
   };
 }
@@ -308,6 +334,33 @@ export function paymentSummary(payment: PaymentTerms): string {
   }
   parts.push(payment.priceBasis === 'FIRM' ? 'firm price' : `${payment.priceBasis.toLowerCase()} price`);
   return parts.join(' · ');
+}
+
+/**
+ * The payment clause, written from the figures.
+ *
+ * One sentence per figure a supplier prices against, in the order they ask
+ * about them: when they are paid, then what is paid early or held back.
+ */
+export function paymentClauseText(payment: PaymentTerms): string {
+  const when = `Undisputed invoices are settled ${payment.creditDays} days from ${PAYMENT_TRIGGER_LABEL[payment.trigger]}.`;
+  const advance = payment.advancePct > 0
+    ? `${payment.advancePct}% is paid in advance`
+    : 'No advance payment';
+  const retention = payment.retentionPct === 0
+    ? 'no retention'
+    : payment.retentionReleaseDays > 0
+      ? `${payment.retentionPct}% is retained and released ${payment.retentionReleaseDays} days after final acceptance`
+      : `${payment.retentionPct}% is retained`;
+  return `${when} ${advance}; ${retention}.`;
+}
+
+/** Bring every clause written from the figures back in line with them. */
+export function syncPaymentClauses<T extends { fromPaymentFields?: boolean; text: string }>(
+  clauses: T[], payment: PaymentTerms,
+): T[] {
+  return clauses.map((clause) =>
+    (clause.fromPaymentFields ? { ...clause, text: paymentClauseText(payment) } : clause));
 }
 
 /** A one-line summary of what an event goes out with. */

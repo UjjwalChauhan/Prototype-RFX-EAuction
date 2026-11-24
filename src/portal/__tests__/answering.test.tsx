@@ -43,7 +43,7 @@ function question(over: Partial<Question>): Question {
     id: 'q', questionnaireId: 'qn-ans', sectionId: null, sequence: 1, code: 'C',
     type: 'short_text', title: 'A question', helpText: '', isRequired: true,
     envelope: 'TECHNICAL', weight: 10, scoringMethod: 'MANUAL', maxScore: 10,
-    rubric: null, isKnockout: false, allowAttachment: false, ...over,
+    rubric: null, isKnockout: false, allowAttachment: false, askedPer: 'VENDOR', ...over,
   };
 }
 

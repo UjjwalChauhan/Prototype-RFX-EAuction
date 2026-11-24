@@ -69,9 +69,9 @@ export type TrafficBand = 'GREEN' | 'AMBER' | 'RED';
 
 /** Colour is never the sole carrier of meaning — icon and label travel with it. */
 export const TRAFFIC_BAND_PRESENTATION: Record<TrafficBand, { icon: string; label: string; hex: string; soft: string }> = {
-  GREEN: { icon: '●', label: 'At or better than target', hex: '#2F9E62', soft: '#E6F6EE' },
-  AMBER: { icon: '◐', label: 'Close to target', hex: '#F2A84E', soft: '#FFF6E0' },
-  RED: { icon: '▲', label: 'Well away from target', hex: '#E5484D', soft: '#FDECEC' },
+  GREEN: { icon: '●', label: 'At or better than target', hex: '#2F9E62', soft: '#F0FDF4' },
+  AMBER: { icon: '◐', label: 'Close to target', hex: '#F2A84E', soft: '#FFFBEB' },
+  RED: { icon: '▲', label: 'Well away from target', hex: '#E5484D', soft: '#FEF2F2' },
 };
 
 export function trafficBand(

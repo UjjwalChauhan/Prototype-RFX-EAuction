@@ -30,10 +30,22 @@ import {
   type AuctionState, controllerAction, submitBid, type ControllerAction,
 } from '../server/auctionService';
 import * as seed from '../data/seed';
+import { progressFamilies } from '../domain/familyProgress';
+import { SEEDED_ENVELOPE_OPENINGS } from '../data/employees';
 import { PURCHASE_REQUESTS, PURCHASE_REQUEST_LINES } from '../data/purchaseRequests';
 import { RATE_CONTRACTS } from '../data/nfaScenarios';
+import type {
+  BidderReview, CommercialAuditEntry, CommercialResultRecord, Declaration, FlagDecision,
+} from '../domain/commercialEvaluation';
+import type { BuyerReply, BuyerRequest, ReviewSignal } from '../domain/buyerRequests';
+import {
+  releaseHeldEvent,
+  type ApprovalNote, type CommercialUnlock, type EnvelopeOpening, type EvaluationSubmission, type EventApprovalRequest,
+  type TechnicalResultRecord,
+} from '../domain/employeePortal';
 
-export type Surface = 'ADMIN' | 'PORTAL';
+/** The buyer's platform, the supplier portal, and the employees' own portal. */
+export type Surface = 'ADMIN' | 'PORTAL' | 'EMPLOYEE';
 
 export interface AppState {
   surface: Surface;
@@ -131,6 +143,45 @@ export interface AppState {
    */
   practiceBids: Bid[];
 
+  /**
+   * Events held back from suppliers until their approval chain signs, and the
+   * holds and clarifications approvers raise against any approval. Read and
+   * written by the Employee Portal; the buyer sees the outcome on the event.
+   */
+  approvalRequests: EventApprovalRequest[];
+  approvalNotes: ApprovalNote[];
+  /** Evaluators who have locked their scores, per ask and envelope. */
+  evaluationSubmissions: EvaluationSubmission[];
+  /** The published technical result of an ask — who qualified, against what. */
+  technicalResults: TechnicalResultRecord[];
+  /** The irreversible opening of an ask's commercial envelope, with its witness. */
+  commercialUnlocks: CommercialUnlock[];
+  /** The recorded breaking of a technical envelope's seal. */
+  envelopeOpenings: EnvelopeOpening[];
+
+  /**
+   * Commercial evaluation. Append-only wherever a later reader has to audit
+   * it: who moved a bidder's number, what they changed it from and why.
+   */
+  commercialAudit: CommercialAuditEntry[];
+  /** Where each bidder stands in the evaluator's review. Absent is "not reviewed". */
+  commercialReviews: BidderReview[];
+  /** What the evaluator did about a flag — the reason a blocking one stopped blocking. */
+  commercialFlagDecisions: FlagDecision[];
+  /** Conflict-of-interest declarations, once per evaluator per event. */
+  commercialDeclarations: Declaration[];
+  /** The frozen outcome of a completed commercial evaluation. */
+  commercialResults: CommercialResultRecord[];
+  /**
+   * Questions the buyer put to a supplier, and the supplier's answers. The
+   * buyer owns the requests and the supplier owns the replies, so each crosses
+   * the sync seam in one direction only.
+   */
+  buyerRequests: BuyerRequest[];
+  buyerReplies: BuyerReply[];
+  /** What the supplier is told about their own price check. Arrives from the buyer. */
+  reviewSignals: ReviewSignal[];
+
   /** Last bid outcome, so both consoles can show the same rejection text. */
   lastBidResult: {
     accepted: boolean;
@@ -157,6 +208,16 @@ export type Action =
       onBehalfReason?: string; confirmed?: boolean;
     }
   | { type: 'CLEAR_BID_RESULT' }
+  | { type: 'UPSERT_COST_COMPONENT'; component: CostComponent; audit: CommercialAuditEntry[] }
+  | { type: 'REMOVE_COST_COMPONENT'; componentId: Id; audit: CommercialAuditEntry[] }
+  | { type: 'COMMERCIAL_AUDIT'; entries: CommercialAuditEntry[] }
+  | { type: 'SET_COMMERCIAL_REVIEW'; review: BidderReview; audit: CommercialAuditEntry[] }
+  | { type: 'DECIDE_COMMERCIAL_FLAG'; decision: FlagDecision; audit: CommercialAuditEntry[] }
+  | { type: 'DECLARE_NO_CONFLICT'; declaration: Declaration; audit: CommercialAuditEntry[] }
+  | { type: 'COMPLETE_COMMERCIAL_EVALUATION'; result: CommercialResultRecord; audit: CommercialAuditEntry[] }
+  | { type: 'RAISE_BUYER_REQUEST'; request: BuyerRequest; audit: CommercialAuditEntry[] }
+  | { type: 'CLOSE_BUYER_REQUEST'; requestId: Id; accepted: boolean; at: number; audit: CommercialAuditEntry[] }
+  | { type: 'REPLY_BUYER_REQUEST'; reply: BuyerReply }
   | {
       type: 'CONTROLLER_ACTION'; eventId: Id; action: ControllerAction; reason: string;
       extendSec?: number; message?: string;
@@ -216,6 +277,11 @@ export type Action =
       bidders?: EventBidder[];
       questionnaires?: Questionnaire[];
       responses?: Response[];
+      /** Buyer-owned: what the buyer asked a supplier, and how it is checking their prices. */
+      buyerRequests?: BuyerRequest[];
+      reviewSignals?: ReviewSignal[];
+      /** Supplier-owned: the answers to those requests. */
+      buyerReplies?: BuyerReply[];
       /**
        * The auctions, buyer-owned: the configuration, the lots and the control
        * log. The roster and the lot details are not sent — they are already on
@@ -250,6 +316,20 @@ export type Action =
   | { type: 'CREATE_SOURCING_REQUISITION'; requisition: SourcingRequisition }
   | { type: 'UPDATE_BIDDER'; bidderId: Id; patch: Partial<EventBidder> }
   | { type: 'ADD_SCORE'; score: Score }
+  | { type: 'ADD_SCORES'; scores: Score[] }
+  /** An event created as drafts and held for approval; the umbrella waits as Pending Approval. */
+  | { type: 'REQUEST_EVENT_APPROVAL'; request: EventApprovalRequest }
+  /** One decision on a held event. The final approval releases it to suppliers; a decline returns it to draft. */
+  | { type: 'DECIDE_EVENT_APPROVAL'; request: EventApprovalRequest; at: ServerMillis }
+  | { type: 'ADD_APPROVAL_NOTE'; note: ApprovalNote }
+  | { type: 'SUBMIT_EVALUATION'; submission: EvaluationSubmission }
+  | { type: 'PUBLISH_TECHNICAL_RESULT'; result: TechnicalResultRecord }
+  /** Delete a sourcing event with every ask, invitation, questionnaire and response under it. */
+  | { type: 'DELETE_SOURCING_EVENT'; eventId: Id }
+  | { type: 'SET_COMMERCIAL_UNLOCK'; unlock: CommercialUnlock }
+  | { type: 'OPEN_ENVELOPE'; opening: EnvelopeOpening }
+  /** Another tab saved newer data. Everything shared is taken; this tab's own view is kept. */
+  | { type: 'HYDRATE'; state: Partial<AppState> }
   | { type: 'ANSWER_CLARIFICATION'; id: Id; answer: string; visibility: Clarification['visibility']; userId: Id }
   | { type: 'ADD_CLARIFICATION'; clarification: Clarification }
   | { type: 'ADD_NEGOTIATION_ROUND'; round: NegotiationRound }
@@ -332,6 +412,20 @@ export function initialState(): AppState {
 
     practiceBids: [],
     rehearsalActivity: [],
+    approvalRequests: [],
+    approvalNotes: [],
+    evaluationSubmissions: [],
+    technicalResults: [],
+    commercialUnlocks: [],
+    envelopeOpenings: SEEDED_ENVELOPE_OPENINGS,
+    commercialAudit: [],
+    commercialReviews: [],
+    commercialFlagDecisions: [],
+    commercialDeclarations: [],
+    commercialResults: [],
+    buyerRequests: [],
+    buyerReplies: [],
+    reviewSignals: [],
     lastBidResult: null,
   };
 }
@@ -519,10 +613,27 @@ function applySyncedAuctions(
   return next;
 }
 
+/**
+ * Every change runs through here, so an event family's stage always follows
+ * its asks — whatever moved them: a publish, an approval, a response synced in
+ * from the supplier portal. See `domain/familyProgress`.
+ */
 export function reducer(state: AppState, action: Action): AppState {
+  return withFamilyProgress(baseReducer(state, action));
+}
+
+function withFamilyProgress(state: AppState): AppState {
+  const events = progressFamilies(state.events, state.responses);
+  return events === state.events ? state : { ...state, events };
+}
+
+function baseReducer(state: AppState, action: Action): AppState {
   switch (action.type) {
     case 'SET_SURFACE':
       return { ...state, surface: action.surface };
+
+    case 'HYDRATE':
+      return { ...state, ...action.state, ...pickLocal(state) };
 
     case 'SET_USER': {
       const user = seed.USERS.find((u) => u.id === action.userId);
@@ -716,11 +827,24 @@ export function reducer(state: AppState, action: Action): AppState {
       };
     }
 
-    case 'UPDATE_EVENT':
-      return {
-        ...state,
-        events: state.events.map((e) => (e.id === action.eventId ? { ...e, ...action.patch } : e)),
-      };
+    case 'UPDATE_EVENT': {
+      const events = state.events.map((e) => (e.id === action.eventId ? { ...e, ...action.patch } : e));
+      const before = state.events.find((e) => e.id === action.eventId);
+      // Issuing the next ask invites only the suppliers who are still in. Anyone
+      // put out at an earlier stage is not invited, so cannot take part.
+      if (before && before.status === 'DRAFT' && action.patch.status === 'PUBLISHED' && before.parentEventId !== null) {
+        const out = new Set(outSuppliers(state, before.parentEventId));
+        const at = action.patch.publishedAt ?? Date.now();
+        const keep = (b: EventBidder) => b.eventId !== before.id || !out.has(b.counterpartyId);
+        const stamp = (b: EventBidder): EventBidder => (b.eventId === before.id && b.invitedAt === null ? { ...b, invitedAt: at } : b);
+        return {
+          ...state, events,
+          bidders: state.bidders.filter(keep).map(stamp),
+          auctions: Object.fromEntries(Object.entries(state.auctions).map(([id, held]) => [id, { ...held, bidders: held.bidders.filter(keep) }])),
+        };
+      }
+      return { ...state, events };
+    }
 
     case 'CREATE_SOURCING_REQUISITION':
       return {
@@ -766,6 +890,9 @@ export function reducer(state: AppState, action: Action): AppState {
         questionnaires: action.questionnaires ?? state.questionnaires,
         responses: action.responses ?? state.responses,
         rehearsalActivity: action.rehearsalActivity ?? state.rehearsalActivity,
+        buyerRequests: action.buyerRequests ?? state.buyerRequests,
+        reviewSignals: action.reviewSignals ?? state.reviewSignals,
+        buyerReplies: mergeReplies(state.buyerReplies, action.buyerReplies),
         auctions: applySyncedAuctions(state.auctions, action, lots, bidders),
       };
     }
@@ -860,6 +987,188 @@ export function reducer(state: AppState, action: Action): AppState {
     case 'ADD_SCORE':
       return { ...state, scores: [...state.scores, action.score] };
 
+    case 'ADD_SCORES':
+      return { ...state, scores: [...state.scores, ...action.scores] };
+
+    case 'REQUEST_EVENT_APPROVAL':
+      return {
+        ...state,
+        approvalRequests: [...state.approvalRequests.filter((r) => r.id !== action.request.id), action.request],
+        events: state.events.map((e) => (e.id === action.request.eventId ? { ...e, status: 'PENDING_APPROVAL' as const } : e)),
+      };
+
+    case 'DECIDE_EVENT_APPROVAL': {
+      const requests = state.approvalRequests.map((r) => (r.id === action.request.id ? action.request : r));
+      if (action.request.status === 'APPROVED') {
+        const released = releaseHeldEvent(state.events, state.bidders, action.request.eventId, action.at);
+        return { ...state, approvalRequests: requests, ...released };
+      }
+      if (action.request.status === 'DECLINED') {
+        return {
+          ...state,
+          approvalRequests: requests,
+          events: state.events.map((e) => (e.id === action.request.eventId ? { ...e, status: 'DRAFT' as const } : e)),
+        };
+      }
+      return { ...state, approvalRequests: requests };
+    }
+
+    case 'ADD_APPROVAL_NOTE':
+      return { ...state, approvalNotes: [...state.approvalNotes, action.note] };
+
+    case 'SUBMIT_EVALUATION':
+      return {
+        ...state,
+        evaluationSubmissions: [
+          ...state.evaluationSubmissions.filter((s) => !(s.eventId === action.submission.eventId
+            && s.evaluatorId === action.submission.evaluatorId && s.envelope === action.submission.envelope)),
+          action.submission,
+        ],
+      };
+
+    case 'DELETE_SOURCING_EVENT': {
+      const root = state.events.find((e) => e.id === action.eventId);
+      if (!root) return state;
+      const family = new Set([root.id, ...state.events.filter((e) => e.parentEventId === root.id).map((e) => e.id)]);
+      const numbers = new Set([...family].map((id) => state.events.find((e) => e.id === id)?.eventNumber));
+      const lots = new Set(state.lots.filter((l) => family.has(l.eventId)).map((l) => l.id));
+      const bidderIds = new Set(state.bidders.filter((b) => family.has(b.eventId)).map((b) => b.id));
+      const out = <T extends { eventId: Id }>(rows: T[]) => rows.filter((r) => !family.has(r.eventId));
+      return {
+        ...state,
+        events: state.events.filter((e) => !family.has(e.id)),
+        lots: state.lots.filter((l) => !lots.has(l.id)),
+        lineItems: state.lineItems.filter((l) => !lots.has(l.lotId)),
+        termsDocuments: out(state.termsDocuments),
+        bidders: state.bidders.filter((b) => !bidderIds.has(b.id)),
+        questionnaires: out(state.questionnaires),
+        responses: out(state.responses),
+        scores: out(state.scores),
+        evaluationSubmissions: out(state.evaluationSubmissions),
+        technicalResults: out(state.technicalResults),
+        envelopeOpenings: out(state.envelopeOpenings),
+        buyerRequests: out(state.buyerRequests),
+        reviewSignals: out(state.reviewSignals),
+        buyerReplies: out(state.buyerReplies),
+        auctions: Object.fromEntries(Object.entries(state.auctions).filter(([id, a]) => !family.has(id) && !family.has(a.auction.eventId))),
+        // The demand it consumed goes back to the pool to be sourced again.
+        purchaseRequestLines: state.purchaseRequestLines.map((l) =>
+          l.eventNumber !== null && numbers.has(l.eventNumber) && l.sourcingState === 'IN_EVENT'
+            ? { ...l, sourcingState: 'UNSOURCED' as const, eventNumber: null }
+            : l),
+        sourcingRequisitions: state.sourcingRequisitions.map((r) => (family.has(r.eventId ?? '') ? { ...r, eventId: null } : r)),
+      };
+    }
+
+    case 'PUBLISH_TECHNICAL_RESULT': {
+      // A supplier who did not clear the technical gate is out of the whole
+      // sourcing event, every later ask included: the flag stops them at every later stage (RFP, RFQ, auction),
+      // and the supplier portal shows them they are no longer in.
+      const out = new Map(action.result.disqualified.map((d) => [d.counterpartyId, d.reason]));
+      const here = state.events.find((e) => e.id === action.result.eventId);
+      const root = here?.parentEventId ?? action.result.eventId;
+      const journey = new Set([root, ...state.events.filter((e) => e.parentEventId === root).map((e) => e.id)]);
+      const mark = (b: EventBidder): EventBidder => (journey.has(b.eventId) && out.has(b.counterpartyId)
+        ? { ...b, disqualified: true, disqualificationReason: 'Not taken forward: the response did not meet a mandatory technical requirement.' }
+        : b);
+      return {
+        ...state,
+        technicalResults: [...state.technicalResults.filter((r) => r.eventId !== action.result.eventId), action.result],
+        bidders: state.bidders.map(mark),
+        auctions: Object.fromEntries(Object.entries(state.auctions).map(([id, held]) => [id, { ...held, bidders: held.bidders.map(mark) }])),
+      };
+    }
+
+    case 'SET_COMMERCIAL_UNLOCK':
+      return {
+        ...state,
+        commercialUnlocks: [...state.commercialUnlocks.filter((u) => u.eventId !== action.unlock.eventId), action.unlock],
+      };
+
+    case 'UPSERT_COST_COMPONENT': {
+      const exists = state.costComponents.some((c) => c.id === action.component.id);
+      return {
+        ...state,
+        costComponents: exists
+          ? state.costComponents.map((c) => (c.id === action.component.id ? action.component : c))
+          : [...state.costComponents, action.component],
+        commercialAudit: [...state.commercialAudit, ...action.audit],
+      };
+    }
+
+    case 'REMOVE_COST_COMPONENT':
+      return {
+        ...state,
+        costComponents: state.costComponents.filter((c) => c.id !== action.componentId),
+        commercialAudit: [...state.commercialAudit, ...action.audit],
+      };
+
+    case 'COMMERCIAL_AUDIT':
+      return { ...state, commercialAudit: [...state.commercialAudit, ...action.entries] };
+
+    case 'SET_COMMERCIAL_REVIEW':
+      return {
+        ...state,
+        commercialReviews: [
+          ...state.commercialReviews.filter((r) => !(r.eventId === action.review.eventId && r.bidderId === action.review.bidderId)),
+          action.review,
+        ],
+        commercialAudit: [...state.commercialAudit, ...action.audit],
+      };
+
+    case 'DECIDE_COMMERCIAL_FLAG':
+      return {
+        ...state,
+        commercialFlagDecisions: [
+          ...state.commercialFlagDecisions.filter((d) => !(d.eventId === action.decision.eventId && d.key === action.decision.key)),
+          action.decision,
+        ],
+        commercialAudit: [...state.commercialAudit, ...action.audit],
+      };
+
+    case 'DECLARE_NO_CONFLICT':
+      return {
+        ...state,
+        commercialDeclarations: [
+          ...state.commercialDeclarations.filter((d) => !(d.eventId === action.declaration.eventId && d.evaluatorId === action.declaration.evaluatorId)),
+          action.declaration,
+        ],
+        commercialAudit: [...state.commercialAudit, ...action.audit],
+      };
+
+    case 'COMPLETE_COMMERCIAL_EVALUATION':
+      return {
+        ...state,
+        commercialResults: [...state.commercialResults.filter((r) => r.eventId !== action.result.eventId), action.result],
+        commercialAudit: [...state.commercialAudit, ...action.audit],
+      };
+
+    case 'RAISE_BUYER_REQUEST':
+      return {
+        ...state,
+        buyerRequests: [action.request, ...state.buyerRequests.filter((r) => r.id !== action.request.id)],
+        commercialAudit: [...state.commercialAudit, ...action.audit],
+      };
+
+    case 'CLOSE_BUYER_REQUEST':
+      return {
+        ...state,
+        buyerRequests: state.buyerRequests.map((r) => (r.id === action.requestId
+          ? { ...r, status: 'CLOSED' as const, closedAt: action.at, accepted: action.accepted }
+          : r)),
+        commercialAudit: [...state.commercialAudit, ...action.audit],
+      };
+
+    case 'REPLY_BUYER_REQUEST':
+      return { ...state, buyerReplies: mergeReplies(state.buyerReplies, [action.reply]) };
+
+    case 'OPEN_ENVELOPE':
+      // An opening is recorded once per bidder; the first stands. A technical
+      // envelope belongs to one bidder, so opening one never blocks the next.
+      if (state.envelopeOpenings.some((o) => o.eventId === action.opening.eventId && o.envelope === action.opening.envelope
+        && o.bidderId === action.opening.bidderId)) return state;
+      return { ...state, envelopeOpenings: [...state.envelopeOpenings, action.opening] };
+
     case 'ANSWER_CLARIFICATION':
       return {
         ...state,
@@ -926,18 +1235,109 @@ const StoreContext = React.createContext<{
   dispatch: React.Dispatch<Action>;
 } | null>(null);
 
+// ---------------------------------------------------------------------------
+// Persistence
+// ---------------------------------------------------------------------------
+//
+// Everything created here — events and their RFI / RFP / RFQ asks, approvals,
+// scores, bids — is kept in this browser, so it survives a reload and every
+// tab on the same address sees the same records. Without this each tab held its
+// own copy in memory: an RFI raised in one was missing from the RFI list in the
+// next, and a reload lost it outright.
+
+export const PERSIST_KEY = 'rfx.store.v1';
+
+/** What belongs to one tab rather than to the records: which portal it shows. */
+const LOCAL_KEYS = ['surface', 'lastBidResult', 'connectionLost'] as const;
+
+function pickLocal(state: AppState): Partial<AppState> {
+  return Object.fromEntries(LOCAL_KEYS.map((k) => [k, state[k]])) as Partial<AppState>;
+}
+
+function shared(state: AppState): Partial<AppState> {
+  const out: Record<string, unknown> = { ...state };
+  for (const k of LOCAL_KEYS) delete out[k];
+  return out as Partial<AppState>;
+}
+
+/** A fingerprint of the state's shape, so data saved by an older build is set aside rather than half-read. */
+function shapeOf(state: object): string {
+  return Object.keys(state).filter((k) => !(LOCAL_KEYS as readonly string[]).includes(k)).sort().join(',');
+}
+
+/** The records as saved: everything shared, with the shape it was saved under. */
+export function serializeState(state: AppState): string {
+  return JSON.stringify({ shape: shapeOf(state), state: shared(state) });
+}
+
+/** Saved records, or null when there are none or they came from a build with a different shape. */
+export function parsePersisted(raw: string | null): Partial<AppState> | null {
+  if (!raw) return null;
+  try {
+    const saved = JSON.parse(raw) as { shape: string; state: Partial<AppState> };
+    return saved.shape === shapeOf(initialState()) ? saved.state : null;
+  } catch {
+    return null;
+  }
+}
+
+function readPersisted(): Partial<AppState> | null {
+  try {
+    return parsePersisted(window.localStorage.getItem(PERSIST_KEY));
+  } catch {
+    return null;
+  }
+}
+
+/** Forget everything created in this browser and start again from the demo data. */
+export function resetPersistedState(): void {
+  try { window.localStorage.removeItem(PERSIST_KEY); } catch { /* storage unavailable */ }
+  window.location.reload();
+}
+
 export function StoreProvider({
-  children, seed: seedState,
+  children, seed: seedState, persist = false,
 }: {
   children: React.ReactNode;
   /** Overrides applied over the seeded state. Used by screen tests. */
   seed?: Partial<AppState>;
+  /** Keep the records in this browser and share them across tabs. The app turns it on; tests leave it off. */
+  persist?: boolean;
 }) {
   const [state, dispatch] = React.useReducer(
     reducer,
     undefined,
-    () => ({ ...initialState(), ...seedState }),
+    () => withFamilyProgress({ ...initialState(), ...(persist ? readPersisted() : null), ...seedState }),
   );
+
+  const written = React.useRef<string | null>(null);
+  React.useEffect(() => {
+    if (!persist) return;
+    const timer = window.setTimeout(() => {
+      try {
+        const raw = serializeState(state);
+        if (raw === written.current) return;
+        written.current = raw;
+        window.localStorage.setItem(PERSIST_KEY, raw);
+      } catch { /* full or blocked storage: keep working in memory */ }
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [state, persist]);
+
+  React.useEffect(() => {
+    if (!persist) return;
+    const onStorage = (e: StorageEvent) => {
+      if (e.key !== PERSIST_KEY) return;
+      if (e.newValue === null) { window.location.reload(); return; }
+      const saved = parsePersisted(e.newValue);
+      if (!saved) return;
+      written.current = e.newValue;
+      dispatch({ type: 'HYDRATE', state: saved });
+    };
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
+  }, [persist]);
+
   const value = React.useMemo(() => ({ state, dispatch }), [state]);
   return <StoreContext.Provider value={value}>{children}</StoreContext.Provider>;
 }
@@ -1113,6 +1513,18 @@ export function responsesForEvent(state: AppState, eventId: Id): Response[] {
  * event, this answers with everyone invited to any of its asks, deduplicated,
  * because that is what "who is on this event" means from the board.
  */
+/**
+ * Suppliers put out of a sourcing event at an earlier ask: disqualified in a
+ * published technical result, or flagged out on any of its asks.
+ */
+export function outSuppliers(state: AppState, rootId: Id): Id[] {
+  const asks = new Set([rootId, ...state.events.filter((e) => e.parentEventId === rootId).map((e) => e.id)]);
+  const out = new Set<Id>();
+  for (const r of state.technicalResults) if (asks.has(r.eventId)) r.disqualified.forEach((d) => out.add(d.counterpartyId));
+  for (const b of state.bidders) if (asks.has(b.eventId) && b.disqualified) out.add(b.counterpartyId);
+  return [...out];
+}
+
 export function biddersForEvent(state: AppState, eventId: Id): EventBidder[] {
   const own = state.bidders.filter((b) => b.eventId === eventId);
   if (own.length > 0) return own;
@@ -1183,6 +1595,39 @@ export function auctionRecords(state: AppState) {
 }
 
 /** The cost components that transform this event's bids. */
+/** Replies merge by id: the same reply arriving twice, from a poll and a local write, is one reply. */
+function mergeReplies(held: BuyerReply[], incoming: BuyerReply[] | undefined): BuyerReply[] {
+  if (!incoming) return held;
+  const ids = new Set(incoming.map((r) => r.id));
+  return [...held.filter((r) => !ids.has(r.id)), ...incoming];
+}
+
+/**
+ * What each supplier is told about their own price check.
+ *
+ * Plain stages only. A supplier learns that their prices were received, are
+ * being checked, or have been — never a rank, a figure, or what was done to
+ * their number. Nothing is said until the envelope has opened, because before
+ * then nobody has looked.
+ */
+export function reviewSignalRows(state: AppState): ReviewSignal[] {
+  const rows: ReviewSignal[] = [];
+  for (const unlock of state.commercialUnlocks) {
+    if (!unlock.unlockedAt) continue;
+    const done = state.commercialResults.some((r) => r.eventId === unlock.eventId);
+    for (const bidder of state.bidders.filter((b) => b.eventId === unlock.eventId)) {
+      if (!state.responses.some((r) => r.bidderId === bidder.id && r.submittedAt)) continue;
+      const touched = state.commercialReviews.some((r) => r.eventId === unlock.eventId && r.bidderId === bidder.id)
+        || state.buyerRequests.some((r) => r.bidderId === bidder.id && r.eventId === unlock.eventId);
+      rows.push({
+        id: `${unlock.eventId}:${bidder.id}`, eventId: unlock.eventId, bidderId: bidder.id,
+        stage: done ? 'COMPLETE' : touched ? 'UNDER_REVIEW' : 'RECEIVED',
+      });
+    }
+  }
+  return rows;
+}
+
 export function costComponentsFor(state: AppState, eventId: Id): CostComponent[] {
   return state.costComponents.filter((c) => c.eventId === eventId);
 }

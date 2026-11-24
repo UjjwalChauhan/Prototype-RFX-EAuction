@@ -16,71 +16,71 @@ export interface StatusPresentation {
 }
 
 export const EVENT_STATUS_PRESENTATION: Record<EventStatus, StatusPresentation> = {
-  DRAFT: { label: 'Draft', icon: '○', fg: '#33333B', bg: '#F1F1F4' },
-  PENDING_APPROVAL: { label: 'Pending Approval', icon: '◐', fg: '#8A6100', bg: '#FFF6E0' },
-  APPROVED: { label: 'Approved', icon: '✓', fg: '#227A4A', bg: '#E6F6EE' },
-  PUBLISHED: { label: 'Published', icon: '●', fg: '#1D4FD8', bg: '#EAF1FE' },
-  OPEN: { label: 'Open', icon: '●', fg: '#1D4FD8', bg: '#EAF1FE' },
-  RESPONSES_CLOSED: { label: 'Responses Closed', icon: '◐', fg: '#8A6100', bg: '#FFF6E0' },
-  UNDER_EVALUATION: { label: 'Under Evaluation', icon: '◆', fg: '#60468A', bg: '#EFEAF7' },
-  IN_NEGOTIATION: { label: 'In Negotiation', icon: '◇', fg: '#60468A', bg: '#EFEAF7' },
-  AUCTION_SCHEDULED: { label: 'Auction Scheduled', icon: '◷', fg: '#1D4FD8', bg: '#EAF1FE' },
-  AUCTION_LIVE: { label: 'Auction Live', icon: '●', fg: '#C13238', bg: '#FDECEC' },
-  AUCTION_CLOSED: { label: 'Auction Closed', icon: '◼', fg: '#33333B', bg: '#F1F1F4' },
-  AWARD_RECOMMENDED: { label: 'Award Recommended', icon: '◆', fg: '#60468A', bg: '#EFEAF7' },
-  PENDING_AWARD_APPROVAL: { label: 'Pending Award Approval', icon: '◐', fg: '#8A6100', bg: '#FFF6E0' },
-  AWARD_PENDING_ONBOARDING: { label: 'Award Pending Onboarding', icon: '◐', fg: '#8A6100', bg: '#FFF6E0' },
-  AWARDED: { label: 'Awarded', icon: '✓', fg: '#227A4A', bg: '#E6F6EE' },
-  CLOSED: { label: 'Closed', icon: '✓', fg: '#33333B', bg: '#F1F1F4' },
-  CANCELLED: { label: 'Cancelled', icon: '✕', fg: '#C13238', bg: '#FDECEC' },
-  ON_HOLD: { label: 'On Hold', icon: '‖', fg: '#8A6100', bg: '#FFF6E0' },
+  DRAFT: { label: 'Draft', icon: '○', fg: '#27272A', bg: '#F4F4F5' },
+  PENDING_APPROVAL: { label: 'Pending Approval', icon: '◐', fg: '#B45309', bg: '#FFFBEB' },
+  APPROVED: { label: 'Approved', icon: '✓', fg: '#15803D', bg: '#F0FDF4' },
+  PUBLISHED: { label: 'Published', icon: '●', fg: '#1D4ED8', bg: '#EFF6FF' },
+  OPEN: { label: 'Open', icon: '●', fg: '#1D4ED8', bg: '#EFF6FF' },
+  RESPONSES_CLOSED: { label: 'Responses Closed', icon: '◐', fg: '#B45309', bg: '#FFFBEB' },
+  UNDER_EVALUATION: { label: 'Under Evaluation', icon: '◆', fg: '#6D28D9', bg: '#F5F3FF' },
+  IN_NEGOTIATION: { label: 'In Negotiation', icon: '◇', fg: '#6D28D9', bg: '#F5F3FF' },
+  AUCTION_SCHEDULED: { label: 'Auction Scheduled', icon: '◷', fg: '#1D4ED8', bg: '#EFF6FF' },
+  AUCTION_LIVE: { label: 'Auction Live', icon: '●', fg: '#B91C1C', bg: '#FEF2F2' },
+  AUCTION_CLOSED: { label: 'Auction Closed', icon: '◼', fg: '#27272A', bg: '#F4F4F5' },
+  AWARD_RECOMMENDED: { label: 'Award Recommended', icon: '◆', fg: '#6D28D9', bg: '#F5F3FF' },
+  PENDING_AWARD_APPROVAL: { label: 'Pending Award Approval', icon: '◐', fg: '#B45309', bg: '#FFFBEB' },
+  AWARD_PENDING_ONBOARDING: { label: 'Award Pending Onboarding', icon: '◐', fg: '#B45309', bg: '#FFFBEB' },
+  AWARDED: { label: 'Awarded', icon: '✓', fg: '#15803D', bg: '#F0FDF4' },
+  CLOSED: { label: 'Closed', icon: '✓', fg: '#27272A', bg: '#F4F4F5' },
+  CANCELLED: { label: 'Cancelled', icon: '✕', fg: '#B91C1C', bg: '#FEF2F2' },
+  ON_HOLD: { label: 'On Hold', icon: '‖', fg: '#B45309', bg: '#FFFBEB' },
 };
 
 export const AUCTION_STATUS_PRESENTATION: Record<AuctionStatus, StatusPresentation> = {
-  DRAFT: { label: 'Draft', icon: '○', fg: '#33333B', bg: '#F1F1F4' },
-  CONFIGURED: { label: 'Configured', icon: '◑', fg: '#33333B', bg: '#F1F1F4' },
-  VALIDATED: { label: 'Validated', icon: '✓', fg: '#227A4A', bg: '#E6F6EE' },
-  SCHEDULED: { label: 'Scheduled', icon: '◷', fg: '#1D4FD8', bg: '#EAF1FE' },
-  LOBBY_OPEN: { label: 'Lobby Open', icon: '◈', fg: '#1D4FD8', bg: '#EAF1FE' },
-  LIVE: { label: 'Live', icon: '●', fg: '#C13238', bg: '#FDECEC' },
-  PAUSED: { label: 'Paused', icon: '‖', fg: '#8A6100', bg: '#FFF6E0' },
-  EXTENDED: { label: 'Extended', icon: '⟳', fg: '#C13238', bg: '#FDECEC' },
-  CLOSED: { label: 'Closed', icon: '◼', fg: '#33333B', bg: '#F1F1F4' },
-  RESULTS_PUBLISHED: { label: 'Results Published', icon: '✓', fg: '#227A4A', bg: '#E6F6EE' },
-  CANCELLED: { label: 'Cancelled', icon: '✕', fg: '#C13238', bg: '#FDECEC' },
-  ABORTED: { label: 'Aborted', icon: '✕', fg: '#C13238', bg: '#FDECEC' },
+  DRAFT: { label: 'Draft', icon: '○', fg: '#27272A', bg: '#F4F4F5' },
+  CONFIGURED: { label: 'Configured', icon: '◑', fg: '#27272A', bg: '#F4F4F5' },
+  VALIDATED: { label: 'Validated', icon: '✓', fg: '#15803D', bg: '#F0FDF4' },
+  SCHEDULED: { label: 'Scheduled', icon: '◷', fg: '#1D4ED8', bg: '#EFF6FF' },
+  LOBBY_OPEN: { label: 'Lobby Open', icon: '◈', fg: '#1D4ED8', bg: '#EFF6FF' },
+  LIVE: { label: 'Live', icon: '●', fg: '#B91C1C', bg: '#FEF2F2' },
+  PAUSED: { label: 'Paused', icon: '‖', fg: '#B45309', bg: '#FFFBEB' },
+  EXTENDED: { label: 'Extended', icon: '⟳', fg: '#B91C1C', bg: '#FEF2F2' },
+  CLOSED: { label: 'Closed', icon: '◼', fg: '#27272A', bg: '#F4F4F5' },
+  RESULTS_PUBLISHED: { label: 'Results Published', icon: '✓', fg: '#15803D', bg: '#F0FDF4' },
+  CANCELLED: { label: 'Cancelled', icon: '✕', fg: '#B91C1C', bg: '#FEF2F2' },
+  ABORTED: { label: 'Aborted', icon: '✕', fg: '#B91C1C', bg: '#FEF2F2' },
 };
 
 export const INVITATION_STATUS_PRESENTATION: Record<InvitationStatus, StatusPresentation> = {
-  SENT: { label: 'Invited', icon: '✉', fg: '#33333B', bg: '#F1F1F4' },
-  VIEWED: { label: 'Viewed', icon: '◔', fg: '#1D4FD8', bg: '#EAF1FE' },
-  ACCEPTED: { label: 'Accepted', icon: '✓', fg: '#227A4A', bg: '#E6F6EE' },
-  DECLINED: { label: 'Declined', icon: '✕', fg: '#C13238', bg: '#FDECEC' },
-  EXPIRED: { label: 'Expired', icon: '◷', fg: '#8A6100', bg: '#FFF6E0' },
-  REVOKED: { label: 'Revoked', icon: '⊘', fg: '#C13238', bg: '#FDECEC' },
+  SENT: { label: 'Invited', icon: '✉', fg: '#27272A', bg: '#F4F4F5' },
+  VIEWED: { label: 'Viewed', icon: '◔', fg: '#1D4ED8', bg: '#EFF6FF' },
+  ACCEPTED: { label: 'Accepted', icon: '✓', fg: '#15803D', bg: '#F0FDF4' },
+  DECLINED: { label: 'Declined', icon: '✕', fg: '#B91C1C', bg: '#FEF2F2' },
+  EXPIRED: { label: 'Expired', icon: '◷', fg: '#B45309', bg: '#FFFBEB' },
+  REVOKED: { label: 'Revoked', icon: '⊘', fg: '#B91C1C', bg: '#FEF2F2' },
 };
 
 export const PARTICIPATION_STATUS_PRESENTATION: Record<ParticipationStatus, StatusPresentation> = {
-  NOT_STARTED: { label: 'Not started', icon: '○', fg: '#9A9AA6', bg: '#F1F1F4' },
-  IN_PROGRESS: { label: 'In progress', icon: '◐', fg: '#8A6100', bg: '#FFF6E0' },
-  SUBMITTED: { label: 'Submitted', icon: '✓', fg: '#227A4A', bg: '#E6F6EE' },
-  WITHDRAWN: { label: 'Withdrawn', icon: '✕', fg: '#C13238', bg: '#FDECEC' },
-  REGISTERED: { label: 'Registered', icon: '◔', fg: '#33333B', bg: '#F1F1F4' },
-  JOINED: { label: 'Joined', icon: '◈', fg: '#1D4FD8', bg: '#EAF1FE' },
-  BIDDING: { label: 'Bidding', icon: '●', fg: '#227A4A', bg: '#E6F6EE' },
-  IDLE: { label: 'Idle', icon: '◷', fg: '#8A6100', bg: '#FFF6E0' },
-  DROPPED_OUT: { label: 'Dropped out', icon: '↓', fg: '#C13238', bg: '#FDECEC' },
-  ELIMINATED: { label: 'Eliminated', icon: '✕', fg: '#C13238', bg: '#FDECEC' },
+  NOT_STARTED: { label: 'Not started', icon: '○', fg: '#A1A1AA', bg: '#F4F4F5' },
+  IN_PROGRESS: { label: 'In progress', icon: '◐', fg: '#B45309', bg: '#FFFBEB' },
+  SUBMITTED: { label: 'Submitted', icon: '✓', fg: '#15803D', bg: '#F0FDF4' },
+  WITHDRAWN: { label: 'Withdrawn', icon: '✕', fg: '#B91C1C', bg: '#FEF2F2' },
+  REGISTERED: { label: 'Registered', icon: '◔', fg: '#27272A', bg: '#F4F4F5' },
+  JOINED: { label: 'Joined', icon: '◈', fg: '#1D4ED8', bg: '#EFF6FF' },
+  BIDDING: { label: 'Bidding', icon: '●', fg: '#15803D', bg: '#F0FDF4' },
+  IDLE: { label: 'Idle', icon: '◷', fg: '#B45309', bg: '#FFFBEB' },
+  DROPPED_OUT: { label: 'Dropped out', icon: '↓', fg: '#B91C1C', bg: '#FEF2F2' },
+  ELIMINATED: { label: 'Eliminated', icon: '✕', fg: '#B91C1C', bg: '#FEF2F2' },
 };
 
 export const ENVELOPE_STATUS_PRESENTATION: Record<EnvelopeStatus, StatusPresentation> = {
-  NOT_STARTED: { label: 'Not started', icon: '○', fg: '#9A9AA6', bg: '#F1F1F4' },
-  DRAFT: { label: 'Draft', icon: '◐', fg: '#8A6100', bg: '#FFF6E0' },
-  SUBMITTED: { label: 'Submitted', icon: '✓', fg: '#227A4A', bg: '#E6F6EE' },
-  SEALED: { label: 'Sealed', icon: '🔒', fg: '#33333B', bg: '#F1F1F4' },
-  UNLOCKED: { label: 'Unlocked', icon: '🔓', fg: '#1D4FD8', bg: '#EAF1FE' },
-  UNDER_EVALUATION: { label: 'Under evaluation', icon: '◆', fg: '#60468A', bg: '#EFEAF7' },
-  EVALUATED: { label: 'Evaluated', icon: '✓', fg: '#227A4A', bg: '#E6F6EE' },
+  NOT_STARTED: { label: 'Not started', icon: '○', fg: '#A1A1AA', bg: '#F4F4F5' },
+  DRAFT: { label: 'Draft', icon: '◐', fg: '#B45309', bg: '#FFFBEB' },
+  SUBMITTED: { label: 'Submitted', icon: '✓', fg: '#15803D', bg: '#F0FDF4' },
+  SEALED: { label: 'Sealed', icon: '🔒', fg: '#27272A', bg: '#F4F4F5' },
+  UNLOCKED: { label: 'Unlocked', icon: '🔓', fg: '#1D4ED8', bg: '#EFF6FF' },
+  UNDER_EVALUATION: { label: 'Under evaluation', icon: '◆', fg: '#6D28D9', bg: '#F5F3FF' },
+  EVALUATED: { label: 'Evaluated', icon: '✓', fg: '#15803D', bg: '#F0FDF4' },
 };
 
 /** Legal transitions. CANCELLED and ON_HOLD are reachable from most states. */
@@ -105,14 +105,24 @@ const EVENT_TRANSITIONS: Partial<Record<EventStatus, EventStatus[]>> = {
   CANCELLED: [],
 };
 
+/**
+ * The buyer may close an event at any point once it has been issued, without
+ * waiting for the deadline or for every supplier to answer.
+ */
+export function canCloseEvent(from: EventStatus): boolean {
+  return !['DRAFT', 'PENDING_APPROVAL', 'APPROVED', 'CLOSED', 'CANCELLED'].includes(from);
+}
+
 export function canTransitionEvent(from: EventStatus, to: EventStatus): boolean {
   if (to === 'ON_HOLD') return from !== 'CLOSED' && from !== 'CANCELLED';
+  if (to === 'CLOSED') return canCloseEvent(from);
   if (from === 'ON_HOLD') return true; // ON_HOLD is reversible.
   return (EVENT_TRANSITIONS[from] ?? []).includes(to);
 }
 
 export function nextEventStatuses(from: EventStatus): EventStatus[] {
   const next = [...(EVENT_TRANSITIONS[from] ?? [])];
+  if (canCloseEvent(from) && !next.includes('CLOSED')) next.push('CLOSED');
   if (from !== 'CLOSED' && from !== 'CANCELLED' && from !== 'ON_HOLD') next.push('ON_HOLD');
   return next;
 }

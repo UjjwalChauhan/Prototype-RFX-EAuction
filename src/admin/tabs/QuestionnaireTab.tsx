@@ -161,6 +161,11 @@ export function QuestionnaireTab({ eventId }: { eventId: string }) {
                         </span>
                         <Chip tone="neutral">{question.type}</Chip>
                         {question.isKnockout && <Chip tone="danger" icon="✕" title="Failing this disqualifies the bidder">knockout</Chip>}
+                        {question.askedPer === 'LINE' && (
+                          <Chip tone="brand" icon="▤" title="Answered once for every line in the basket">
+                            per line item
+                          </Chip>
+                        )}
                         {question.weight > 0 && <Chip tone="brand">weight {question.weight}</Chip>}
                       </div>
                       <div style={{ fontSize: 11.5, color: color.textSecondary, marginTop: 4 }}>

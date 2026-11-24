@@ -3,11 +3,11 @@
  */
 import { describe, expect, it } from 'vitest';
 import {
-  ALL_VENDOR_POINTS, REQUEST_POINTS, askableQuestions, classify, draftFromResponse,
-  invitationsFor, isAnswered,
+  ALL_VENDOR_POINTS, REQUEST_POINTS, askableQuestions, askedCells, classify, draftFromResponse,
+  invitationsFor, isAnswered, linesAsked,
   missingRequired, submissionFor, timeRemaining, toAnswers, vendorSections,
 } from '../vendorPortal';
-import type { EventBidder, Question, Response, SourcingEvent } from '../types';
+import type { EventBidder, LineItem, Question, Response, SourcingEvent } from '../types';
 
 const NOW = 1_000_000_000;
 const HOUR = 3_600_000;
@@ -248,7 +248,7 @@ describe('answering', () => {
     id: 'q1', questionnaireId: 'qn', sectionId: null, sequence: 1, code: 'A',
     type: 'short_text', title: 'A question', helpText: '', isRequired: true,
     envelope: 'TECHNICAL', weight: 10, scoringMethod: 'MANUAL', maxScore: 10,
-    rubric: null, isKnockout: false, allowAttachment: false, ...over,
+    rubric: null, isKnockout: false, allowAttachment: false, askedPer: 'VENDOR', ...over,
   });
 
   it('counts zero and false as answers, blank as not', () => {
@@ -270,13 +270,15 @@ describe('answering', () => {
       q({ id: 'b', isRequired: false }),
       q({ id: 'c' }),
     ];
-    const missing = missingRequired(questions, { a: { value: 'done', attachmentName: null } });
-    expect(missing.map((m) => m.id)).toEqual(['c']);
+    const missing = missingRequired(
+      askedCells(questions), { a: { value: 'done', attachmentName: null } },
+    );
+    expect(missing.map((m) => m.question.id)).toEqual(['c']);
   });
 
   it('never holds a supplier to a question that asks nothing', () => {
     const questions = [q({ id: 's', type: 'section', isRequired: true })];
-    expect(missingRequired(questions, {})).toHaveLength(0);
+    expect(missingRequired(askedCells(questions), {})).toHaveLength(0);
     expect(askableQuestions(questions)).toHaveLength(0);
   });
 
@@ -287,12 +289,14 @@ describe('answering', () => {
 
   it('emits answers only for questions that were asked and answered', () => {
     const questions = [q({ id: 'a' }), q({ id: 'b' })];
-    const answers = toAnswers(questions, {
+    const answers = toAnswers(askedCells(questions), {
       a: { value: 'yes', attachmentName: null },
       b: { value: '', attachmentName: null },
       ghost: { value: 'x', attachmentName: null },
     });
-    expect(answers).toEqual([{ questionId: 'a', value: 'yes', attachmentName: null }]);
+    expect(answers).toEqual([
+      { questionId: 'a', value: 'yes', attachmentName: null, lineItemId: null },
+    ]);
   });
 
   it('reopens a submitted response for resubmission', () => {
@@ -301,5 +305,69 @@ describe('answering', () => {
     });
     expect(draft.a).toEqual({ value: 7, attachmentName: 'x.pdf' });
     expect(draftFromResponse(null)).toEqual({});
+  });
+});
+
+/**
+ * The buyer's narrowing, as the supplier experiences it.
+ *
+ * It is only worth anything if it changes the form. A question tagged to
+ * three of six suppliers that still appears on all six forms is a buyer
+ * setting that lies, which is worse than not having it.
+ */
+describe('a question narrowed to some suppliers or some lines', () => {
+  const q = (over: Partial<Question> = {}): Question => ({
+    id: 'q1', questionnaireId: 'qn', sectionId: null, sequence: 1, code: 'A',
+    type: 'short_text', title: 'A question', helpText: '', isRequired: true,
+    envelope: 'TECHNICAL', weight: 10, scoringMethod: 'MANUAL', maxScore: 10,
+    rubric: null, isKnockout: false, allowAttachment: false, askedPer: 'VENDOR', ...over,
+  });
+
+  const line = (id: string): LineItem => ({
+    id, lotId: 'lot-1', lineNumber: 1, itemCode: id.toUpperCase(), description: `Item ${id}`,
+    specification: '', quantity: 1, uom: 'ea', deliveryLocation: '', deliveryDate: null,
+    incoterm: null, taxClass: null, baselinePrice: null, baselineSource: null, currency: 'USD',
+    isOptional: false, allowAlternate: false, category: 'IT Hardware', superCategory: null,
+    sourcePrLineId: null,
+  });
+
+  const lines = [line('l1'), line('l2'), line('l3')];
+
+  it('is off the form of a supplier it was not put to', () => {
+    const questions = [
+      q({ id: 'a' }),
+      q({ id: 'b', sequence: 2, askedOf: { vendorIds: ['cp-1'], lineIds: null } }),
+    ];
+    expect(askableQuestions(questions, 'cp-1').map((x) => x.id)).toEqual(['a', 'b']);
+    expect(askableQuestions(questions, 'cp-2').map((x) => x.id)).toEqual(['a']);
+  });
+
+  it('is on the buyer\'s own view of the form, which is the form and not an answer', () => {
+    const questions = [q({ id: 'b', askedOf: { vendorIds: ['cp-1'], lineIds: null } })];
+    expect(askableQuestions(questions).map((x) => x.id)).toEqual(['b']);
+  });
+
+  it('produces a box only against the lines it names', () => {
+    const question = q({ askedPer: 'LINE', askedOf: { vendorIds: null, lineIds: ['l1', 'l3'] } });
+    expect(linesAsked(question, lines).map((l) => l.id)).toEqual(['l1', 'l3']);
+    expect(askedCells([question], lines).map((c) => c.lineItemId)).toEqual(['l1', 'l3']);
+  });
+
+  it('asks about every line when the buyer narrowed nothing', () => {
+    expect(linesAsked(q({ askedPer: 'LINE' }), lines)).toHaveLength(3);
+  });
+
+  it('falls back to the whole basket rather than showing a question with no boxes', () => {
+    const question = q({ askedPer: 'LINE', askedOf: { vendorIds: null, lineIds: ['l-gone'] } });
+    expect(linesAsked(question, lines).map((l) => l.id)).toEqual(['l1', 'l2', 'l3']);
+  });
+
+  it('never holds a supplier to a required question they were never shown', () => {
+    const questions = [
+      q({ id: 'a' }),
+      q({ id: 'b', sequence: 2, askedOf: { vendorIds: ['cp-1'], lineIds: null } }),
+    ];
+    const missing = missingRequired(askedCells(questions, [], 'cp-2'), {});
+    expect(missing.map((m) => m.question.id)).toEqual(['a']);
   });
 });

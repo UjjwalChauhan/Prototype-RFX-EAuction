@@ -16,6 +16,7 @@ import {
 import { biddersForEvent, useStore } from '../../store/store';
 import { COUNTERPARTIES, COUNTERPARTY_NAMES } from '../../data/seed';
 import type { EventBidder } from '../../domain/types';
+import { SOLICITATION_STAGES } from '../../domain/stageEvents';
 
 export function BiddersTab({ eventId }: { eventId: string }) {
   const { state, dispatch } = useStore();
@@ -28,6 +29,27 @@ export function BiddersTab({ eventId }: { eventId: string }) {
     (b) => b.participationStatus === 'JOINED' || b.participationStatus === 'BIDDING',
   );
 
+  // Where each supplier stood at the earlier asks of this journey. An ask only
+  // invites those who cleared the one before, so the buyer can see why.
+  const event = state.events.find((e) => e.id === eventId);
+  const myStage = event?.stagesEnabled.length === 1 ? event.stagesEnabled[0] : null;
+  const earlier = myStage && event?.parentEventId
+    ? state.events.filter((e) => e.parentEventId === event.parentEventId && e.stagesEnabled.length === 1
+      && SOLICITATION_STAGES.indexOf(e.stagesEnabled[0] as never) < SOLICITATION_STAGES.indexOf(myStage as never))
+    : [];
+  const carried = (b: EventBidder): { tone: 'brand' | 'danger' | 'gold'; text: string } | null => {
+    if (earlier.length === 0) return null;
+    for (const e of earlier) {
+      const result = state.technicalResults.find((r) => r.eventId === e.id);
+      const stage = e.stagesEnabled[0];
+      if (result?.disqualified.some((d) => d.counterpartyId === b.counterpartyId)) return { tone: 'danger', text: `Not taken forward from ${stage}` };
+      if (!result) {
+        const answered = state.responses.some((r) => r.eventId === e.id && r.bidderId === `${e.id}-eb-${b.counterpartyId}` && r.submittedAt !== null);
+        return { tone: 'gold', text: answered ? `${stage} evaluation pending` : `${stage} not answered` };
+      }
+    }
+    return { tone: 'brand', text: `Qualified at ${earlier[earlier.length - 1].stagesEnabled[0]}` };
+  };
   const columns: Column<EventBidder>[] = [
     {
       key: 'name', header: 'Counterparty', width: '230px',
@@ -43,6 +65,13 @@ export function BiddersTab({ eventId }: { eventId: string }) {
         </div>
       ),
     },
+    ...(earlier.length > 0 ? [{
+      key: 'carried', header: 'Carried forward',
+      render: (bidder: EventBidder) => {
+        const c = carried(bidder);
+        return c ? <Chip tone={c.tone} icon={c.tone === 'brand' ? '✓' : c.tone === 'danger' ? '✕' : '◷'}>{c.text}</Chip> : null;
+      },
+    }] : []),
     {
       // Axis 1.
       key: 'invitation', header: 'Invitation',

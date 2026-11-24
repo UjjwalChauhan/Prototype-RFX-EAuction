@@ -22,14 +22,15 @@ import { StageList } from '../IntakeAndLists';
 import { ResponsesTab } from '../tabs/ResponsesTab';
 import { PortalRequests } from '../../portal/PortalRequests';
 import {
-  REQUEST_POINTS, askPointOf, askableQuestions, toAnswers, vendorSections,
+  REQUEST_POINTS, askPointOf, askableQuestions, askedCells, toAnswers, vendorSections,
+  type AskedCell,
   type AnswerDraft,
 } from '../../domain/vendorPortal';
 import { COUNTERPARTY_NAMES } from '../../data/seed';
 import { CATEGORY_TEMPLATES, TENANT_TEMPLATES } from '../../data/questionnaireTemplates';
 import { seedQuestionnaires } from '../../domain/questionnaireTemplates';
 import { serverNow } from '../../server/clock';
-import type { Question, Response, VendorInputPoint } from '../../domain/types';
+import type { Response, VendorInputPoint } from '../../domain/types';
 
 const paint = (state: AppState, node: React.ReactNode) =>
   renderToString(<StoreProvider seed={state}>{node}</StoreProvider>)
@@ -55,16 +56,16 @@ function liveAsk(state: AppState, point: 'RFI' | 'RFP' | 'RFQ') {
  * the same `toAnswers`, against the same questionnaire — so what lands in the
  * buyer's store is what a supplier pressing the button would actually send.
  */
-function answerAll(questions: Question[]): AnswerDraft {
+function answerAll(cells: AskedCell[]): AnswerDraft {
   const draft: AnswerDraft = {};
-  for (const question of askableQuestions(questions)) {
+  for (const { key, question } of cells) {
     const value =
       question.type === 'yes_no' ? true
         : question.type === 'number' ? 12
           : question.type === 'single_choice' || question.type === 'multiple_choice'
             ? (question.config?.options?.[0]?.id ?? 'yes')
             : 'Answered in full.';
-    draft[question.id] = { value, attachmentName: null };
+    draft[key] = { value, attachmentName: null };
   }
   return draft;
 }
@@ -81,7 +82,7 @@ function submit(
     bidderId: bidder.id,
     version: 1,
     submittedAt: serverNow(),
-    answers: toAnswers(questions, answerAll(questions)),
+    answers: toAnswers(askedCells(questions), answerAll(askedCells(questions))),
     priceLines: [],
   };
   return { state: reducer(state, { type: 'SUBMIT_RESPONSE', response }), response };
@@ -171,7 +172,7 @@ describe.each(WRITTEN)('%s', (point) => {
 
   it('opens the ask onto the questions the buyer published', () => {
     const { questionnaire } = liveAsk(state, point);
-    const asked = askableQuestions(questionnaire!.questions);
+    const asked = askedCells(questionnaire!.questions);
     expect(asked.length).toBeGreaterThan(0);
     // Every question the buyer shaped can be answered and sent back; an ask
     // whose questionnaire produces nothing is an empty form.
@@ -337,7 +338,7 @@ describe('an ask created through the wizard', () => {
   it('carries the answers back into the section it was issued from', async () => {
     const { state, family, ask } = await publishLadder();
     const questionnaire = family.questionnaires.find((q) => q.eventId === ask.id)!;
-    const asked = askableQuestions(questionnaire.questions);
+    const asked = askedCells(questionnaire.questions);
     expect(asked.length).toBeGreaterThan(0);
 
     const bidder = state.bidders.find((b) => b.eventId === ask.id)!;
@@ -361,7 +362,7 @@ describe('an ask created through the wizard', () => {
   it('does not credit the answer to a sibling ask', async () => {
     const { state, family, ask } = await publishLadder();
     const questionnaire = family.questionnaires.find((q) => q.eventId === ask.id)!;
-    const asked = askableQuestions(questionnaire.questions);
+    const asked = askedCells(questionnaire.questions);
     const bidder = state.bidders.find((b) => b.eventId === ask.id)!;
     const after = reducer(state, {
       type: 'SUBMIT_RESPONSE',

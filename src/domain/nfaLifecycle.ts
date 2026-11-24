@@ -634,20 +634,20 @@ export function revisionLabel(nfa: Nfa): string {
 }
 
 export const REVISION_OUTCOME_PRESENTATION: Record<NfaRevisionOutcome, { label: string; icon: string; fg: string; bg: string }> = {
-  IN_FLIGHT: { label: 'In flight', icon: '◐', fg: '#8A6100', bg: '#FFF6E0' },
-  APPROVED: { label: 'Approved', icon: '✓', fg: '#227A4A', bg: '#E6F6EE' },
-  RETURNED: { label: 'Returned', icon: '↩', fg: '#8A6100', bg: '#FFF6E0' },
-  REJECTED: { label: 'Rejected', icon: '✕', fg: '#C13238', bg: '#FDECEC' },
-  RECALLED: { label: 'Recalled', icon: '⊘', fg: '#33333B', bg: '#F1F1F4' },
-  SUPERSEDED: { label: 'Superseded', icon: '⤷', fg: '#6E6E7A', bg: '#F1F1F4' },
+  IN_FLIGHT: { label: 'In flight', icon: '◐', fg: '#B45309', bg: '#FFFBEB' },
+  APPROVED: { label: 'Approved', icon: '✓', fg: '#15803D', bg: '#F0FDF4' },
+  RETURNED: { label: 'Returned', icon: '↩', fg: '#B45309', bg: '#FFFBEB' },
+  REJECTED: { label: 'Rejected', icon: '✕', fg: '#B91C1C', bg: '#FEF2F2' },
+  RECALLED: { label: 'Recalled', icon: '⊘', fg: '#27272A', bg: '#F4F4F5' },
+  SUPERSEDED: { label: 'Superseded', icon: '⤷', fg: '#6E6E7A', bg: '#F4F4F5' },
 };
 
 export const NFA_STATUS_PRESENTATION: Record<NfaStatus, { label: string; icon: string; fg: string; bg: string }> = {
-  IN_APPROVAL: { label: 'In approval', icon: '◐', fg: '#8A6100', bg: '#FFF6E0' },
-  RETURNED: { label: 'Returned to buyer', icon: '↩', fg: '#8A6100', bg: '#FFF6E0' },
-  RECALLED: { label: 'Recalled', icon: '⊘', fg: '#33333B', bg: '#F1F1F4' },
-  APPROVED: { label: 'Approved', icon: '✓', fg: '#227A4A', bg: '#E6F6EE' },
-  REJECTED: { label: 'Rejected', icon: '✕', fg: '#C13238', bg: '#FDECEC' },
+  IN_APPROVAL: { label: 'In approval', icon: '◐', fg: '#B45309', bg: '#FFFBEB' },
+  RETURNED: { label: 'Returned to buyer', icon: '↩', fg: '#B45309', bg: '#FFFBEB' },
+  RECALLED: { label: 'Recalled', icon: '⊘', fg: '#27272A', bg: '#F4F4F5' },
+  APPROVED: { label: 'Approved', icon: '✓', fg: '#15803D', bg: '#F0FDF4' },
+  REJECTED: { label: 'Rejected', icon: '✕', fg: '#B91C1C', bg: '#FEF2F2' },
 };
 
 export interface SubmitRevisionInput {

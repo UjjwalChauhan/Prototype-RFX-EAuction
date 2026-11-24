@@ -262,10 +262,19 @@ describe('seeded purchase requests', () => {
     for (const l of PURCHASE_REQUEST_LINES) expect(ids.has(l.requestId), l.id).toBe(true);
   });
 
-  it('is deterministic — the same import yields the same first line', () => {
-    const first = PURCHASE_REQUEST_LINES[0];
-    expect(first.requestId).toBe('pr-00130');
-    expect(first.lineNumber).toBe(1);
+  it('is deterministic — a given requisition always generates the same lines', () => {
+    // Named rather than positional: which requisition sits first in the list
+    // is a presentation decision, and pinning the test to it meant adding one
+    // to the fixture looked like the generator had stopped being deterministic.
+    const firstOf = (requestId: string) =>
+      PURCHASE_REQUEST_LINES.find((l) => l.requestId === requestId);
+
+    expect(firstOf('pr-00130')).toMatchObject({
+      lineNumber: 1, itemCode: 'MON-019', description: 'Monitor, 27in colour-calibrated',
+    });
+    expect(firstOf('pr-00124')).toMatchObject({
+      lineNumber: 1, itemCode: 'PPE-070', description: 'PPE, safety boots S3',
+    });
   });
 
   it('presents every status and sourcing state it actually uses', () => {

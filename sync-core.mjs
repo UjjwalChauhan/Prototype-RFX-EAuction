@@ -27,9 +27,16 @@
  * process to start, and in `sync-server.mjs` for anyone who wants it on a port
  * of its own.
  *
- * It is deliberately not a database. Stop it and the demo starts fresh, which
- * is the right behaviour for a prototype.
+ * The document is kept in a file when one is given — `vite-plugin-sync.mjs`
+ * gives both dev servers the same one. That is what makes the link independent
+ * of ports and start order: the buyer's platform and the supplier portal each
+ * hold the seam themselves and read and write the same file, so an RFI
+ * published from the buyer reaches the portal whichever servers are up, on
+ * whatever ports, and is still there after either restarts. Without a file it
+ * is held in memory, as before. `POST /__sync/reset` empties it.
  */
+import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { dirname } from 'node:path';
 
 /**
  * The slice each side owns, and may therefore write.
@@ -50,10 +57,45 @@
  */
 const ADMIN_KEYS = [
   'events', 'lots', 'lineItems', 'termsDocuments', 'bidders', 'questionnaires', 'auctions',
+  // What the buyer asked a supplier during commercial evaluation, and the plain stage of the
+  // supplier's own price check. The supplier's answers travel back as `buyerReplies`.
+  'buyerRequests', 'reviewSignals',
 ];
-const VENDOR_KEYS = ['responses', 'bids', 'participation', 'rehearsalActivity'];
+const VENDOR_KEYS = ['responses', 'bids', 'participation', 'rehearsalActivity', 'buyerReplies'];
 
 const emptyFor = (keys) => Object.fromEntries(keys.map((key) => [key, []]));
+
+/**
+ * Take a deleted sourcing event, and everything that hangs off it, out of both
+ * halves. Merging by id can only add, so without a record of what was deleted
+ * a tab that had not heard of the deletion would publish the event straight
+ * back. `removed` is that record: the ids of the sourcing events deleted.
+ */
+const prune = (removed, admin, vendor) => {
+  if (removed.length === 0) return;
+  const gone = new Set(removed);
+  const family = new Set([
+    ...removed,
+    ...admin.events.filter((e) => gone.has(e.parentEventId)).map((e) => e.id),
+  ]);
+  const lotIds = new Set(admin.lots.filter((l) => family.has(l.eventId)).map((l) => l.id));
+  const auctionIds = new Set(admin.auctions.filter((a) => family.has(a.auction?.eventId) || family.has(a.id)).map((a) => a.id));
+  const bidderIds = new Set(admin.bidders.filter((b) => family.has(b.eventId)).map((b) => b.id));
+  const byEvent = (rows) => rows.filter((r) => !family.has(r.eventId));
+  admin.events = admin.events.filter((e) => !family.has(e.id));
+  admin.lots = admin.lots.filter((l) => !lotIds.has(l.id));
+  admin.lineItems = admin.lineItems.filter((l) => !lotIds.has(l.lotId));
+  admin.termsDocuments = byEvent(admin.termsDocuments);
+  admin.bidders = admin.bidders.filter((b) => !bidderIds.has(b.id));
+  admin.questionnaires = byEvent(admin.questionnaires);
+  admin.auctions = admin.auctions.filter((a) => !auctionIds.has(a.id));
+  admin.buyerRequests = byEvent(admin.buyerRequests);
+  admin.reviewSignals = byEvent(admin.reviewSignals);
+  vendor.responses = byEvent(vendor.responses);
+  vendor.bids = vendor.bids.filter((b) => !auctionIds.has(b.auctionId));
+  vendor.participation = vendor.participation.filter((p) => !bidderIds.has(p.id));
+  vendor.buyerReplies = byEvent(vendor.buyerReplies);
+};
 
 /**
  * Fold an incoming collection into the one held, keyed by id.
@@ -123,7 +165,7 @@ const readBody = (req) =>
  * `handle` answers true when it dealt with the request, so a caller can mount
  * it in front of anything else and fall through when the path is not ours.
  */
-export function createSyncStore({ log = () => {} } = {}) {
+export function createSyncStore({ log = () => {}, file = null } = {}) {
   /** Written by the buyer, read by the supplier. */
   let fromAdmin = emptyFor(ADMIN_KEYS);
   /** Written by the supplier, read by the buyer. */
@@ -149,6 +191,46 @@ export function createSyncStore({ log = () => {} } = {}) {
    * buyer's platform has said anything.
    */
   let present = { admin: false, vendor: false };
+  /** Sourcing events that have been deleted; see `prune`. */
+  let removed = [];
+
+  /**
+   * The file, when there is one. Read again whenever another process has
+   * written it since — the other dev server shares it — and written whole
+   * through a temporary file, so a reader never sees half of it.
+   */
+  let seenMtime = 0;
+  const load = () => {
+    if (!file) return;
+    try {
+      const mtime = statSync(file).mtimeMs;
+      if (mtime === seenMtime) return;
+      const saved = JSON.parse(readFileSync(file, 'utf8'));
+      fromAdmin = { ...emptyFor(ADMIN_KEYS), ...saved.fromAdmin };
+      fromVendor = { ...emptyFor(VENDOR_KEYS), ...saved.fromVendor };
+      version = Math.max(version, Number(saved.version) || 0);
+      hashes = saved.hashes ?? {};
+      present = saved.present ?? present;
+      removed = Array.isArray(saved.removed) ? saved.removed : removed;
+      prune(removed, fromAdmin, fromVendor);
+      seenMtime = mtime;
+    } catch {
+      // No file yet, or one caught mid-replace: keep what is held.
+    }
+  };
+  const save = () => {
+    if (!file) return;
+    try {
+      mkdirSync(dirname(file), { recursive: true });
+      const temp = `${file}.${process.pid}.tmp`;
+      writeFileSync(temp, JSON.stringify({ version, hashes, present, removed, fromAdmin, fromVendor }));
+      renameSync(temp, file);
+      seenMtime = statSync(file).mtimeMs;
+    } catch (error) {
+      log(`could not save ${file}: ${error?.message ?? error}`);
+    }
+  };
+  load();
 
   const json = (res, status, body) => {
     const payload = JSON.stringify(body);
@@ -185,10 +267,11 @@ export function createSyncStore({ log = () => {} } = {}) {
 
   /** Handle one request. Returns false when the path belongs to someone else. */
   async function handle(req, res, pathname) {
+    load();
     if (pathname === '/state') {
       if (req.method === 'OPTIONS') { json(res, 204, {}); return true; }
       if (req.method !== 'GET') return false;
-      json(res, 200, { version, hashes, present, ...fromAdmin, ...fromVendor });
+      json(res, 200, { version, hashes, present, removed, ...fromAdmin, ...fromVendor });
       return true;
     }
 
@@ -199,7 +282,13 @@ export function createSyncStore({ log = () => {} } = {}) {
     try {
       if (pathname === '/admin') {
         const { body, raw } = await readBody(req);
+        load();
         fromAdmin = write('admin', ADMIN_KEYS, fromAdmin, body, raw, clientOf(req, 'admin'));
+        if (Array.isArray(body.removeEvents)) {
+          removed = [...new Set([...removed, ...body.removeEvents.filter((id) => typeof id === 'string')])];
+        }
+        prune(removed, fromAdmin, fromVendor);
+        save();
         log(
           `admin push  v${version}  ${fromAdmin.events.length} events, `
           + `${fromAdmin.bidders.length} invitations, ${fromAdmin.questionnaires.length} questionnaires`,
@@ -210,7 +299,10 @@ export function createSyncStore({ log = () => {} } = {}) {
 
       if (pathname === '/vendor') {
         const { body, raw } = await readBody(req);
+        load();
         fromVendor = write('vendor', VENDOR_KEYS, fromVendor, body, raw, clientOf(req, 'vendor'));
+        prune(removed, fromAdmin, fromVendor);
+        save();
         log(`vendor push v${version}  ${fromVendor.responses.length} responses`);
         json(res, 200, { version });
         return true;
@@ -219,8 +311,10 @@ export function createSyncStore({ log = () => {} } = {}) {
       fromAdmin = emptyFor(ADMIN_KEYS);
       fromVendor = emptyFor(VENDOR_KEYS);
       hashes = {};
+      removed = [];
       present = { admin: false, vendor: false };
       version += 1;
+      save();
       json(res, 200, { version });
       return true;
     } catch (error) {

@@ -9,7 +9,7 @@
 import type {
   Auction, AuctionControlEvent, AuctionLot, Bid, Clarification, ConfigSetting, CostComponent, Counterparty,
   DoARule, EventBidder, Id, LineItem, Lot, NegotiationRound, Question, Questionnaire,
-  Response, Score, Side, SourcingEvent, Stage, User, VendorInputPoint,
+  PriceLine, Response, Score, Side, SourcingEvent, Stage, TemplateSection, User, VendorInputPoint,
 } from '../domain/types';
 import { DEFAULT_ANTI_GAMING } from '../domain/auctionEngine';
 import { defaultParameters } from '../domain/auctionRules';
@@ -21,6 +21,9 @@ import {
   TEMPLATE_CUSTOM_KEY, TEMPLATE_WEIGHTING_KEY, basketCategories, seedQuestionnaires,
 } from '../domain/questionnaireTemplates';
 import { questionnaireIdFor } from '../domain/stageEvents';
+import {
+  SEEDED_ALTERNATES, SEEDED_LINE_EXTRAS, SEEDED_MATCHED_TO, SEEDED_MISCOUNT, SEEDED_UNPRICED, USD_INR,
+} from './commercialSeed';
 import {
   CATEGORY_TEMPLATES, DEFAULT_STAGE_WEIGHTING, LOGISTICS_TEMPLATES, TENANT_TEMPLATES,
 } from './questionnaireTemplates';
@@ -82,79 +85,115 @@ export const CURRENT_USER = USERS[0];
  */
 export const COUNTERPARTIES: Counterparty[] = [
   {
-    id: 'cp-abc', name: 'ABC Supplies Co.', onboardingRating: 92, performanceRating: 88,
+    id: 'cp-abc', code: 'VN-00153', name: 'ABC Supplies Co.', onboardingRating: 92, performanceRating: 88,
     categoriesServed: ['Office & Administrative', 'Facilities & MRO'],
     locationsServed: ['Dubai', 'Abu Dhabi'],
     isProvisional: false, contactEmail: 'bids@abcsupplies.example',
   },
   {
-    id: 'cp-global', name: 'Global Office Solutions', onboardingRating: 85, performanceRating: 74,
+    id: 'cp-global', code: 'VN-00287', name: 'Global Office Solutions', onboardingRating: 85, performanceRating: 74,
     categoriesServed: ['Office & Administrative', 'IT Hardware'], locationsServed: ['Dubai'],
     isProvisional: false, contactEmail: 'tenders@globaloffice.example',
   },
   {
-    id: 'cp-prime', name: 'Prime Stationery Ltd.', onboardingRating: 78, performanceRating: 81,
+    id: 'cp-prime', code: 'VN-00304', name: 'Prime Stationery Ltd.', onboardingRating: 78, performanceRating: 81,
     categoriesServed: ['Office & Administrative'], locationsServed: ['Sharjah', 'Dubai'],
     isProvisional: false, contactEmail: 'sales@primestationery.example',
   },
   {
-    id: 'cp-metro', name: 'Metro Business Supplies', onboardingRating: 64, performanceRating: 0,
+    id: 'cp-metro', code: 'VN-00531', name: 'Metro Business Supplies', onboardingRating: 64, performanceRating: 0,
     categoriesServed: ['Office & Administrative'], locationsServed: ['Dubai'],
     // Invited but not yet on the master: can bid, cannot be awarded.
     isProvisional: true, contactEmail: 'hello@metrosupplies.example',
   },
   {
-    id: 'cp-nova', name: 'Nova Technologies FZE', onboardingRating: 94, performanceRating: 91,
+    id: 'cp-nova', code: 'VN-00412', name: 'Nova Technologies FZE', onboardingRating: 94, performanceRating: 91,
     categoriesServed: ['IT Hardware'], locationsServed: ['Dubai', 'Bengaluru'],
     isProvisional: false, contactEmail: 'bids@novatech.example',
   },
   {
-    id: 'cp-orion', name: 'Orion Systems Integrators', onboardingRating: 88, performanceRating: 76,
+    id: 'cp-orion', code: 'VN-00338', name: 'Orion Systems Integrators', onboardingRating: 88, performanceRating: 76,
     categoriesServed: ['IT Hardware', 'Electrical & Instrumentation'],
     locationsServed: ['Chennai', 'Hyderabad'],
     isProvisional: false, contactEmail: 'tenders@orionsys.example',
   },
   {
-    id: 'cp-summit', name: 'Summit Industrial Supply', onboardingRating: 90, performanceRating: 84,
+    id: 'cp-summit', code: 'VN-00196', name: 'Summit Industrial Supply', onboardingRating: 90, performanceRating: 84,
     categoriesServed: ['Facilities & MRO', 'Electrical & Instrumentation'],
     locationsServed: ['Pune', 'Ahmedabad'],
     isProvisional: false, contactEmail: 'sales@summitindustrial.example',
   },
   {
-    id: 'cp-keystone', name: 'Keystone Maintenance Co.', onboardingRating: 71, performanceRating: 63,
+    id: 'cp-keystone', code: 'VN-00447', name: 'Keystone Maintenance Co.', onboardingRating: 71, performanceRating: 63,
     categoriesServed: ['Facilities & MRO'], locationsServed: ['Kolkata', 'Bengaluru'],
     isProvisional: false, contactEmail: 'bids@keystonemro.example',
   },
   {
-    id: 'cp-transline', name: 'Transline Fleet Services', onboardingRating: 83, performanceRating: 79,
+    id: 'cp-transline', code: 'VN-00221', name: 'Transline Fleet Services', onboardingRating: 83, performanceRating: 79,
     categoriesServed: ['Fleet & Logistics'], locationsServed: ['Mumbai', 'Pune'],
     isProvisional: false, contactEmail: 'tenders@transline.example',
   },
   {
-    id: 'cp-cargo', name: 'CargoBridge Logistics', onboardingRating: 76, performanceRating: 68,
+    id: 'cp-cargo', code: 'VN-00509', name: 'CargoBridge Logistics', onboardingRating: 76, performanceRating: 68,
     categoriesServed: ['Fleet & Logistics'], locationsServed: ['Chennai', 'Kolkata'],
     isProvisional: false, contactEmail: 'bids@cargobridge.example',
   },
   {
-    id: 'cp-voltek', name: 'Voltek Instrumentation', onboardingRating: 69, performanceRating: 0,
+    id: 'cp-voltek', code: 'VN-00578', name: 'Voltek Instrumentation', onboardingRating: 69, performanceRating: 0,
     categoriesServed: ['Electrical & Instrumentation'], locationsServed: ['Hyderabad'],
     isProvisional: true, contactEmail: 'hello@voltek.example',
   },
   {
-    id: 'cp-meridian', name: 'Meridian Advisory Partners', onboardingRating: 96, performanceRating: 89,
+    id: 'cp-meridian', code: 'VN-00118', name: 'Meridian Advisory Partners', onboardingRating: 96, performanceRating: 89,
     categoriesServed: ['Professional & Consultancy'], locationsServed: ['Mumbai', 'Dubai'],
     isProvisional: false, contactEmail: 'proposals@meridianadvisory.example',
   },
   {
-    id: 'cp-anchor', name: 'Anchor Consulting Group', onboardingRating: 87, performanceRating: 72,
+    id: 'cp-anchor', code: 'VN-00265', name: 'Anchor Consulting Group', onboardingRating: 87, performanceRating: 72,
     categoriesServed: ['Professional & Consultancy'], locationsServed: ['Bengaluru'],
     isProvisional: false, contactEmail: 'bids@anchorconsulting.example',
   },
   {
-    id: 'cp-brightpath', name: 'Brightpath Talent Services', onboardingRating: 74, performanceRating: 66,
+    id: 'cp-brightpath', code: 'VN-00493', name: 'Brightpath Talent Services', onboardingRating: 74, performanceRating: 66,
     categoriesServed: ['Professional & Consultancy', 'Office & Administrative'],
     locationsServed: ['Gurugram'],
     isProvisional: false, contactEmail: 'tenders@brightpath.example',
+  },
+
+  /*
+   * Software suppliers.
+   *
+   * A category with no supplier on the master is a category no event can be
+   * raised in: the shortlist proposes nobody, the coverage check refuses the
+   * basket, and the requisition behind it is stuck however well specified it
+   * is. These four exist so the software requisitions can actually be sourced.
+   *
+   * One of them is provisional on purpose, as in every other category here —
+   * a shortlist where every candidate is awardable never shows the buyer the
+   * case that needs the decision.
+   */
+  {
+    id: 'cp-aperture', code: 'VN-00602', name: 'Aperture Software Labs', onboardingRating: 93, performanceRating: 86,
+    categoriesServed: ['IT Software'], locationsServed: ['Bengaluru', 'Pune'],
+    isProvisional: false, contactEmail: 'bids@aperturelabs.example',
+  },
+  {
+    id: 'cp-northwind', code: 'VN-00617', name: 'Northwind Cloud Systems', onboardingRating: 81, performanceRating: 77,
+    // Resells hardware as well, which is how most software houses of this size
+    // actually appear on a vendor master.
+    categoriesServed: ['IT Software', 'IT Hardware'], locationsServed: ['Mumbai', 'Hyderabad'],
+    isProvisional: false, contactEmail: 'tenders@northwindcloud.example',
+  },
+  {
+    id: 'cp-lumen', code: 'VN-00634', name: 'Lumen Enterprise Applications', onboardingRating: 88, performanceRating: 74,
+    categoriesServed: ['IT Software', 'Professional & Consultancy'],
+    locationsServed: ['Gurugram', 'Dubai'],
+    isProvisional: false, contactEmail: 'proposals@lumenapps.example',
+  },
+  {
+    id: 'cp-halcyon', code: 'VN-00661', name: 'Halcyon SaaS Partners', onboardingRating: 67, performanceRating: 0,
+    categoriesServed: ['IT Software'], locationsServed: ['Chennai'],
+    isProvisional: true, contactEmail: 'hello@halcyonsaas.example',
   },
 ];
 
@@ -908,6 +947,8 @@ export function REQUEST_QUESTIONNAIRES(): Questionnaire[] {
         category: draft.category,
         name: draft.templateName,
         sourceTemplateId: draft.templateId,
+        sections: draft.sections,
+        scoreScale: draft.scoreScale,
         questions: draft.questions.map((question, i): Question => {
           // A template question carries the template it came from; an event
           // question carries the questionnaire. Everything else is the same.
@@ -971,22 +1012,22 @@ export const COST_COMPONENTS: CostComponent[] = [
   {
     id: 'cc-freight', eventId: PRIMARY_EVENT_ID, name: 'Inbound freight', basis: 'LUMP_SUM',
     valueByBidder: { 'eb-abc': 4_200, 'eb-global': 1_100, 'eb-prime': 6_900, 'eb-metro': 3_400 },
-    source: 'Standard freight lane rates, origin-based', agentProposed: true,
+    source: 'Standard freight lane rates, origin-based', agentProposed: true, kind: 'FREIGHT',
   },
   {
     id: 'cc-duty', eventId: PRIMARY_EVENT_ID, name: 'Import duty', basis: 'PERCENTAGE',
     valueByBidder: { 'eb-abc': 1.5, 'eb-global': 0, 'eb-prime': 2.8, 'eb-metro': 1.5 },
-    source: 'Duty rate by country of origin', agentProposed: true,
+    source: 'Duty rate by country of origin', agentProposed: true, kind: 'DUTY',
   },
   {
     id: 'cc-payterms', eventId: PRIMARY_EVENT_ID, name: 'Payment-term NPV', basis: 'PERCENTAGE',
     valueByBidder: { 'eb-abc': 0.4, 'eb-global': -2.1, 'eb-prime': 0.9, 'eb-metro': 0.6 },
-    source: 'Tenant cost of capital at 7.5%', agentProposed: true,
+    source: 'Tenant cost of capital at 7.5%', agentProposed: true, kind: 'PAYMENT_TERMS',
   },
   {
     id: 'cc-switch', eventId: PRIMARY_EVENT_ID, name: 'Switching cost', basis: 'LUMP_SUM',
     valueByBidder: { 'eb-abc': 0, 'eb-global': 2_800, 'eb-prime': 2_800, 'eb-metro': 3_900 },
-    source: 'Catalogue integration and onboarding effort', agentProposed: false,
+    source: 'Catalogue integration and onboarding effort', agentProposed: false, kind: 'SWITCHING',
   },
 ];
 
@@ -1028,7 +1069,7 @@ const QUESTIONS: Question[] = [
     type: 'number', title: 'Years trading in this category', helpText: 'Whole years.',
     isRequired: true, envelope: 'TECHNICAL', weight: 10, scoringMethod: 'RULE',
     maxScore: 10, rubric: '0–2 yrs = 2 · 3–5 yrs = 6 · 6+ yrs = 10',
-    isKnockout: false, allowAttachment: false,
+    isKnockout: false, allowAttachment: false, askedPer: 'VENDOR',
   },
   {
     id: 'q-2', questionnaireId: 'qn-1', sectionId: 'sec-company', sequence: 2, code: 'CO.ISO9001',
@@ -1036,30 +1077,33 @@ const QUESTIONS: Question[] = [
     helpText: 'Attach a current certificate. Mandatory.',
     isRequired: true, envelope: 'TECHNICAL', weight: 15, scoringMethod: 'MANUAL',
     maxScore: 10, rubric: 'Valid = 10 · Expired = 4 · Absent = 0',
-    isKnockout: true, allowAttachment: true,
+    isKnockout: true, allowAttachment: true, askedPer: 'VENDOR',
   },
   {
     id: 'q-3', questionnaireId: 'qn-1', sectionId: 'sec-capability', sequence: 3, code: 'CAP.LEADTIME',
-    type: 'lead_time', title: 'Standard lead time from order to delivery',
+    type: 'lead_time', title: 'Lead time from order to delivery',
     helpText: 'In calendar days, to the Dubai DC.',
     isRequired: true, envelope: 'TECHNICAL', weight: 20, scoringMethod: 'RULE',
     maxScore: 10, rubric: '≤5 days = 10 · 6–10 = 7 · 11–20 = 4 · >20 = 1',
-    isKnockout: false, allowAttachment: false,
+    // Asked per line: a paper mill and a stationery wholesaler quote the same
+    // basket with wildly different lead times item by item, and one number for
+    // the whole basket is the slowest line pretending to be an average.
+    isKnockout: false, allowAttachment: false, askedPer: 'LINE',
   },
   {
     id: 'q-4', questionnaireId: 'qn-1', sectionId: 'sec-capability', sequence: 4, code: 'CAP.CAPACITY',
-    type: 'capacity_declaration', title: 'Monthly capacity for A4 paper',
-    helpText: 'Reams per month you can reliably supply.',
+    type: 'capacity_declaration', title: 'Monthly capacity for this item',
+    helpText: 'Units per month you can reliably supply, in the line\'s own unit of measure.',
     isRequired: true, envelope: 'TECHNICAL', weight: 15, scoringMethod: 'AI_ASSISTED',
-    maxScore: 10, rubric: 'Assessed against our 1,000 reams/month requirement.',
-    isKnockout: false, allowAttachment: true,
+    maxScore: 10, rubric: 'Assessed against the quantity on the line.',
+    isKnockout: false, allowAttachment: true, askedPer: 'LINE',
   },
   {
     id: 'q-5', questionnaireId: 'qn-1', sectionId: 'sec-sustain', sequence: 5, code: 'SUS.FSC',
     type: 'yes_no', title: 'Is all paper FSC or PEFC certified?',
     helpText: '', isRequired: true, envelope: 'TECHNICAL', weight: 10, scoringMethod: 'MANUAL',
     maxScore: 10, rubric: 'Yes = 10 · Partial = 5 · No = 0',
-    isKnockout: false, allowAttachment: true,
+    isKnockout: false, allowAttachment: true, askedPer: 'VENDOR',
   },
   {
     id: 'q-6', questionnaireId: 'qn-1', sectionId: 'sec-commercial', sequence: 6, code: 'COM.PRICES',
@@ -1068,6 +1112,9 @@ const QUESTIONS: Question[] = [
     helpText: 'Unit prices for every line. Extended values are calculated.',
     isRequired: true, envelope: 'COMMERCIAL', weight: 0, scoringMethod: 'NONE',
     maxScore: 0, rubric: null, isKnockout: false, allowAttachment: false,
+    // The price grid binds to the basket itself, so it is one question that
+    // already spans every line rather than a question asked per line.
+    askedPer: 'VENDOR',
   },
   {
     id: 'q-7', questionnaireId: 'qn-1', sectionId: 'sec-commercial', sequence: 7, code: 'COM.PAYTERMS',
@@ -1077,35 +1124,51 @@ const QUESTIONS: Question[] = [
     // commercial_terms_score, keeping price in exactly one component.
     isRequired: true, envelope: 'COMMERCIAL', weight: 10, scoringMethod: 'RULE',
     maxScore: 10, rubric: '≥60 days = 10 · 30–59 = 6 · <30 = 3',
-    isKnockout: false, allowAttachment: false,
+    isKnockout: false, allowAttachment: false, askedPer: 'VENDOR',
   },
   {
     id: 'q-8', questionnaireId: 'qn-1', sectionId: 'sec-commercial', sequence: 8, code: 'COM.WARRANTY',
     type: 'short_text', title: 'Returns and defect policy',
     helpText: '', isRequired: false, envelope: 'COMMERCIAL', weight: 5, scoringMethod: 'MANUAL',
     maxScore: 10, rubric: 'Assessed on clarity and coverage.',
-    isKnockout: false, allowAttachment: false,
+    isKnockout: false, allowAttachment: false, askedPer: 'VENDOR',
   },
 ];
+
+/**
+ * The sections the demonstration questionnaire groups its questions under.
+ *
+ * Each declares a budget, and the questions inside allocate from it. Set to
+ * exactly what they carry, so the seeded library opens fully allocated rather
+ * than showing a warning on a template nobody has touched.
+ */
+export const QUESTION_SECTIONS: TemplateSection[] = [
+  { id: 'sec-company', name: 'Company & compliance', sequence: 1, weight: 0, askedPer: 'VENDOR' as const },
+  // Lead time and capacity differ item by item, so this block is asked once
+  // for every line in the basket.
+  { id: 'sec-capability', name: 'Capability, per item', sequence: 2, weight: 0, askedPer: 'LINE' as const },
+  { id: 'sec-sustain', name: 'Sustainability', sequence: 3, weight: 0, askedPer: 'VENDOR' as const },
+  { id: 'sec-commercial', name: 'Commercial', sequence: 4, weight: 0, askedPer: 'VENDOR' as const },
+].map((section) => ({
+  ...section,
+  weight: QUESTIONS
+    .filter((q) => q.sectionId === section.id && q.weight > 0 && q.scoringMethod !== 'NONE')
+    .reduce((sum, q) => sum + q.weight, 0),
+}));
 
 export const QUESTIONNAIRE: Questionnaire = {
   id: 'qn-1', eventId: PRIMARY_EVENT_ID, stage: 'RFP',
   name: 'Office supplies — technical and commercial',
+  sections: QUESTION_SECTIONS,
+  scoreScale: 100,
   questions: QUESTIONS,
 };
-
-export const QUESTION_SECTIONS = [
-  { id: 'sec-company', name: 'Company & compliance' },
-  { id: 'sec-capability', name: 'Capability' },
-  { id: 'sec-sustain', name: 'Sustainability' },
-  { id: 'sec-commercial', name: 'Commercial' },
-];
 
 // ---------------------------------------------------------------------------
 // Responses and scores
 // ---------------------------------------------------------------------------
 
-export const RESPONSES: Response[] = EVENT_BIDDERS.map((bidder, i) => ({
+const BASE_RESPONSES: Response[] = EVENT_BIDDERS.map((bidder, i) => ({
   id: `resp-${bidder.id}`, eventId: PRIMARY_EVENT_ID, bidderId: bidder.id, version: 1,
   submittedAt: bidder.participationStatus === 'REGISTERED' && i === 3
     ? SEED_NOW - 4 * DAY
@@ -1133,6 +1196,45 @@ export const RESPONSES: Response[] = EVENT_BIDDERS.map((bidder, i) => ({
     currency: 'INR', leadTimeDays: [4, 9, 6, 14][i], notes: null,
   })),
 }));
+
+/**
+ * The seeded responses with what each supplier offered beyond a unit price —
+ * discounts, validity, a dollar quote, a wrong total, a missing line. See
+ * `commercialSeed` for what each bidder is there to demonstrate.
+ */
+export const RESPONSES: Response[] = BASE_RESPONSES.map((response) => {
+  const extras = SEEDED_LINE_EXTRAS[response.bidderId] ?? {};
+  const unpriced = SEEDED_UNPRICED[response.bidderId] ?? [];
+  const matched = SEEDED_MATCHED_TO[response.bidderId];
+  const miscount = SEEDED_MISCOUNT[response.bidderId] ?? {};
+  const alternates = SEEDED_ALTERNATES[response.bidderId] ?? {};
+  const foreign = response.bidderId === 'eb-global';
+  const lines = response.priceLines
+    .filter((p) => !unpriced.includes(p.lineItemId))
+    .map((p) => {
+      const copied = matched?.lines.includes(p.lineItemId)
+        ? BASE_RESPONSES.find((r) => matched.to === r.bidderId)?.priceLines.find((x) => x.lineItemId === p.lineItemId)
+        : undefined;
+      const unitPrice = copied?.unitPrice ?? p.unitPrice;
+      const item = LINE_ITEMS.find((l) => l.id === p.lineItemId);
+      const withExtras: PriceLine = { ...p, unitPrice, ...extras[p.lineItemId] };
+      if (miscount[p.lineItemId] !== undefined && item) {
+        withExtras.extendedValue = Math.round(unitPrice * item.quantity * miscount[p.lineItemId]);
+      }
+      // A dollar quote keeps the rupee figure at the frozen rate in `unitPrice`.
+      return foreign
+        ? { ...withExtras, quotedCurrency: 'USD', quotedUnitPrice: Number((unitPrice / USD_INR).toFixed(4)) }
+        : withExtras;
+    });
+  const alt: PriceLine[] = Object.entries(alternates).flatMap(([lineId, a]) => {
+    const main = lines.find((l) => l.lineItemId === lineId);
+    return main ? [{
+      ...main, unitPrice: Number((main.unitPrice * a.unitFactor).toFixed(2)), alternateOf: lineId,
+      alternateNote: a.note, discountPct: undefined, extendedValue: undefined, source: undefined, notes: null,
+    }] : [];
+  });
+  return { ...response, priceLines: [...lines, ...alt] };
+});
 
 export const SCORES: Score[] = [
   mkScore('s-1', 'eb-abc', 'q-2', 'user-js', 10, 'Certificate current and in scope.', 'MANUAL'),
@@ -1299,10 +1401,16 @@ const TENANT_JOURNEY: CustomJourney = {
   id: 'CJ-01',
   name: 'Sealed RFP with negotiation',
   description:
-    'High-value services where price stays sealed until the technical panel has scored, and the shortlist is then negotiated rather than auctioned.',
+    'High-value services where price stays sealed until the technical panel has scored the proposals, and the qualified shortlist is then quoted and negotiated rather than auctioned.',
   side: 'BUY',
-  stages: ['INTAKE', 'RFP', 'CLARIFICATION', 'EVALUATION', 'NEGOTIATION', 'AWARD', 'APPROVAL'],
-  vendorInputPoints: ['RFP', 'NEGOTIATION'],
+  // Composed in the activity model: the RFP is scored, the quote that follows
+  // it is negotiated, and the Q&A window is open throughout rather than
+  // occupying a position in the sequence.
+  stages: ['INTAKE', 'RFP', 'RFQ', 'AWARD', 'APPROVAL'],
+  evaluateAt: ['RFP'],
+  negotiateAt: ['RFQ'],
+  clarifications: true,
+  vendorInputPoints: ['RFP', 'RFQ', 'NEGOTIATION'],
   basedOn: 'JP-06',
   scopeType: 'TENANT',
   scopeId: 'tenant-udaan',
@@ -1317,6 +1425,9 @@ const CATEGORY_JOURNEY: CustomJourney = {
     'Three quotes and an award for low-value indirect spend. No approval stage — the DoA floor already covers this band.',
   side: 'BUY',
   stages: ['INTAKE', 'RFQ', 'AWARD'],
+  evaluateAt: [],
+  negotiateAt: [],
+  clarifications: false,
   vendorInputPoints: ['RFQ'],
   basedOn: 'JP-11',
   scopeType: 'CATEGORY',

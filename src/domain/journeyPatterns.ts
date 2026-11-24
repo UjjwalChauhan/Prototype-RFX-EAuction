@@ -8,8 +8,7 @@
 import type { JourneyPattern, JourneyPatternId, Stage, VendorInputPoint } from './types';
 
 export const WIZARD_BASICS = 'Basics';
-export const WIZARD_ITEMS = 'Items & Lots';
-export const WIZARD_BIDDERS = 'Bidders';
+export const WIZARD_ITEMS = 'Items & Vendors';
 export const WIZARD_QUESTIONNAIRE = 'Questionnaire';
 export const WIZARD_TERMS = 'Terms';
 export const WIZARD_EVALUATION = 'Evaluation';
@@ -31,7 +30,7 @@ export const JOURNEY_PATTERNS: Record<JourneyPatternId, JourneyPattern> = {
     stages: ['INTAKE', 'AUCTION', 'AWARD', 'APPROVAL'],
     vendorInputPoints: ['INTAKE', 'AUCTION'],
     side: 'BUY',
-    wizardSteps: [WIZARD_BASICS, WIZARD_ITEMS, WIZARD_BIDDERS, WIZARD_TERMS, WIZARD_AUCTION, WIZARD_REVIEW],
+    wizardSteps: [WIZARD_BASICS, WIZARD_ITEMS, WIZARD_TERMS, WIZARD_AUCTION, WIZARD_REVIEW],
     typicalDuration: '10 min', serves: 'Speed',
   },
   'JP-02': {
@@ -40,7 +39,7 @@ export const JOURNEY_PATTERNS: Record<JourneyPatternId, JourneyPattern> = {
     stages: ['INTAKE', 'RFQ', 'EVALUATION', 'AWARD', 'APPROVAL'],
     vendorInputPoints: ['RFQ'],
     side: 'BUY',
-    wizardSteps: [WIZARD_BASICS, WIZARD_ITEMS, WIZARD_BIDDERS, WIZARD_QUESTIONNAIRE, WIZARD_TERMS, WIZARD_TIMELINE, WIZARD_REVIEW],
+    wizardSteps: [WIZARD_BASICS, WIZARD_ITEMS, WIZARD_QUESTIONNAIRE, WIZARD_TERMS, WIZARD_TIMELINE, WIZARD_REVIEW],
     typicalDuration: '3 days', serves: 'The volume workhorse',
   },
   'JP-03': {
@@ -49,7 +48,7 @@ export const JOURNEY_PATTERNS: Record<JourneyPatternId, JourneyPattern> = {
     stages: ['INTAKE', 'RFQ', 'EVALUATION', 'AUCTION', 'AWARD', 'APPROVAL'],
     vendorInputPoints: ['RFQ', 'AUCTION'],
     side: 'BUY',
-    wizardSteps: [WIZARD_BASICS, WIZARD_ITEMS, WIZARD_BIDDERS, WIZARD_QUESTIONNAIRE, WIZARD_TERMS, WIZARD_AUCTION, WIZARD_TIMELINE, WIZARD_REVIEW],
+    wizardSteps: [WIZARD_BASICS, WIZARD_ITEMS, WIZARD_QUESTIONNAIRE, WIZARD_TERMS, WIZARD_AUCTION, WIZARD_TIMELINE, WIZARD_REVIEW],
     typicalDuration: '5 days', serves: 'RFQ sets the field; auction compresses price',
   },
   'JP-04': {
@@ -58,7 +57,7 @@ export const JOURNEY_PATTERNS: Record<JourneyPatternId, JourneyPattern> = {
     stages: ['INTAKE', 'RFQ', 'EVALUATION', 'NEGOTIATION', 'AUCTION', 'AWARD', 'APPROVAL'],
     vendorInputPoints: ['RFQ', 'NEGOTIATION', 'AUCTION'],
     side: 'BUY',
-    wizardSteps: [WIZARD_BASICS, WIZARD_ITEMS, WIZARD_BIDDERS, WIZARD_QUESTIONNAIRE, WIZARD_TERMS, WIZARD_EVALUATION, WIZARD_AUCTION, WIZARD_TIMELINE, WIZARD_REVIEW],
+    wizardSteps: [WIZARD_BASICS, WIZARD_ITEMS, WIZARD_QUESTIONNAIRE, WIZARD_TERMS, WIZARD_EVALUATION, WIZARD_AUCTION, WIZARD_TIMELINE, WIZARD_REVIEW],
     typicalDuration: '2 weeks', serves: 'Most common enterprise pattern',
   },
   'JP-05': {
@@ -67,7 +66,7 @@ export const JOURNEY_PATTERNS: Record<JourneyPatternId, JourneyPattern> = {
     stages: ['INTAKE', 'RFI', 'RFP', 'RFQ', 'EVALUATION', 'AUCTION', 'AWARD', 'APPROVAL'],
     vendorInputPoints: ['RFI', 'RFP', 'RFQ', 'AUCTION'],
     side: 'BUY',
-    wizardSteps: [WIZARD_BASICS, WIZARD_ITEMS, WIZARD_BIDDERS, WIZARD_QUESTIONNAIRE, WIZARD_TERMS, WIZARD_EVALUATION, WIZARD_AUCTION, WIZARD_TIMELINE, WIZARD_REVIEW],
+    wizardSteps: [WIZARD_BASICS, WIZARD_ITEMS, WIZARD_QUESTIONNAIRE, WIZARD_TERMS, WIZARD_EVALUATION, WIZARD_AUCTION, WIZARD_TIMELINE, WIZARD_REVIEW],
     typicalDuration: '3 weeks', serves: 'High-value strategic tender',
   },
   'JP-06': {
@@ -76,7 +75,7 @@ export const JOURNEY_PATTERNS: Record<JourneyPatternId, JourneyPattern> = {
     stages: ['INTAKE', 'RFP', 'EVALUATION', 'AWARD', 'APPROVAL'],
     vendorInputPoints: ['RFP'],
     side: 'BUY',
-    wizardSteps: [WIZARD_BASICS, WIZARD_ITEMS, WIZARD_BIDDERS, WIZARD_QUESTIONNAIRE, WIZARD_TERMS, WIZARD_EVALUATION, WIZARD_TIMELINE, WIZARD_REVIEW],
+    wizardSteps: [WIZARD_BASICS, WIZARD_ITEMS, WIZARD_QUESTIONNAIRE, WIZARD_TERMS, WIZARD_EVALUATION, WIZARD_TIMELINE, WIZARD_REVIEW],
     typicalDuration: '4 weeks', serves: 'Public-sector style',
   },
   'JP-07': {
@@ -103,7 +102,7 @@ export const JOURNEY_PATTERNS: Record<JourneyPatternId, JourneyPattern> = {
     stages: ['INTAKE', 'AUCTION', 'AWARD', 'APPROVAL'],
     vendorInputPoints: ['AUCTION'],
     side: 'BUY',
-    wizardSteps: [WIZARD_BASICS, WIZARD_ITEMS, WIZARD_BIDDERS, WIZARD_TERMS, WIZARD_AUCTION, WIZARD_REVIEW],
+    wizardSteps: [WIZARD_BASICS, WIZARD_ITEMS, WIZARD_TERMS, WIZARD_AUCTION, WIZARD_REVIEW],
     typicalDuration: '2 days', serves: 'Short-closed PO balance',
   },
   'JP-10': {
@@ -112,7 +111,7 @@ export const JOURNEY_PATTERNS: Record<JourneyPatternId, JourneyPattern> = {
     stages: ['INTAKE', 'RFQ', 'AUCTION', 'AWARD', 'APPROVAL'],
     vendorInputPoints: ['RFQ', 'AUCTION'],
     side: 'BUY',
-    wizardSteps: [WIZARD_BASICS, WIZARD_ITEMS, WIZARD_BIDDERS, WIZARD_TERMS, WIZARD_TIMELINE, WIZARD_REVIEW],
+    wizardSteps: [WIZARD_BASICS, WIZARD_ITEMS, WIZARD_TERMS, WIZARD_TIMELINE, WIZARD_REVIEW],
     typicalDuration: '1 week', serves: 'Contract expiry or index drift',
   },
   'JP-11': {
@@ -121,7 +120,7 @@ export const JOURNEY_PATTERNS: Record<JourneyPatternId, JourneyPattern> = {
     stages: ['INTAKE', 'RFQ', 'AWARD'],
     vendorInputPoints: ['RFQ'],
     side: 'BUY',
-    wizardSteps: [WIZARD_BASICS, WIZARD_ITEMS, WIZARD_BIDDERS, WIZARD_TERMS, WIZARD_REVIEW],
+    wizardSteps: [WIZARD_BASICS, WIZARD_ITEMS, WIZARD_TERMS, WIZARD_REVIEW],
     typicalDuration: '4 hours', serves: 'Tail spend',
   },
   'JP-12': {
@@ -130,7 +129,7 @@ export const JOURNEY_PATTERNS: Record<JourneyPatternId, JourneyPattern> = {
     stages: ['INTAKE', 'AUCTION', 'AWARD', 'APPROVAL'],
     vendorInputPoints: ['AUCTION'],
     side: 'SELL',
-    wizardSteps: [WIZARD_BASICS, WIZARD_ITEMS, WIZARD_BIDDERS, WIZARD_TERMS, WIZARD_AUCTION, WIZARD_REVIEW],
+    wizardSteps: [WIZARD_BASICS, WIZARD_ITEMS, WIZARD_TERMS, WIZARD_AUCTION, WIZARD_REVIEW],
     typicalDuration: '1 week', serves: 'Scrap and surplus',
   },
   'JP-13': {
@@ -139,7 +138,7 @@ export const JOURNEY_PATTERNS: Record<JourneyPatternId, JourneyPattern> = {
     stages: ['INTAKE', 'RFQ', 'EVALUATION', 'AUCTION', 'AWARD', 'APPROVAL'],
     vendorInputPoints: ['RFQ', 'AUCTION'],
     side: 'SELL',
-    wizardSteps: [WIZARD_BASICS, WIZARD_ITEMS, WIZARD_BIDDERS, WIZARD_QUESTIONNAIRE, WIZARD_TERMS, WIZARD_AUCTION, WIZARD_TIMELINE, WIZARD_REVIEW],
+    wizardSteps: [WIZARD_BASICS, WIZARD_ITEMS, WIZARD_QUESTIONNAIRE, WIZARD_TERMS, WIZARD_AUCTION, WIZARD_TIMELINE, WIZARD_REVIEW],
     typicalDuration: '2 weeks', serves: 'Structured sales process',
   },
 };
@@ -180,6 +179,39 @@ export interface StageRailItem {
 }
 
 /**
+ * The order the rail walks: the journey's own sequence, with any skipped stage
+ * slotted in at the canonical position it would have occupied.
+ *
+ * The rail used to walk `STAGE_ORDER` unconditionally, which meant a journey
+ * that ran its auction before its RFQ rendered the other way round and the
+ * configuration was a lie. Journeys are composed in the buyer's own order now,
+ * so the rail follows the journey. A master pattern's stages are already
+ * canonical, so nothing about those changes.
+ */
+export function railSequence(
+  stagesEnabled: Stage[],
+  skipReasons: Partial<Record<Stage, string>> = {},
+  currentStage?: Stage,
+): Stage[] {
+  const sequence: Stage[] = [];
+  for (const stage of stagesEnabled) if (!sequence.includes(stage)) sequence.push(stage);
+
+  const extras = STAGE_ORDER.filter(
+    (stage) =>
+      !sequence.includes(stage) &&
+      (skipReasons[stage] !== undefined || stage === currentStage),
+  );
+  for (const stage of extras) {
+    // Nothing in the journey says where a stage that did not run belongs, so
+    // the canonical order answers it: before the first stage that outranks it.
+    const canonical = STAGE_ORDER.indexOf(stage);
+    const at = sequence.findIndex((s) => STAGE_ORDER.indexOf(s) > canonical);
+    sequence.splice(at === -1 ? sequence.length : at, 0, stage);
+  }
+  return sequence;
+}
+
+/**
  * The stage rail. Skipped stages are shown, not hidden — the NFA must record
  * every stage that did not happen along with its reason.
  */
@@ -189,11 +221,12 @@ export function buildStageRail(
   conditionalStages: Stage[] = [],
   skipReasons: Partial<Record<Stage, string>> = {},
 ): StageRailItem[] {
-  const currentIndex = STAGE_ORDER.indexOf(currentStage);
-  return STAGE_ORDER.filter(
+  const sequence = railSequence(stagesEnabled, skipReasons, currentStage);
+  const currentIndex = sequence.indexOf(currentStage);
+  return sequence.filter(
     (stage) => stagesEnabled.includes(stage) || skipReasons[stage] !== undefined,
   ).map((stage) => {
-    const index = STAGE_ORDER.indexOf(stage);
+    const index = sequence.indexOf(stage);
     let state: StageRailState;
     if (!stagesEnabled.includes(stage)) state = 'SKIPPED';
     else if (conditionalStages.includes(stage) && index > currentIndex) state = 'CONDITIONAL';
@@ -209,8 +242,22 @@ export function buildStageRail(
   });
 }
 
+/**
+ * Whether a journey does work that used to be a stage of its own.
+ *
+ * Evaluation and negotiation are composed as activities now — switched on at
+ * the solicitation or price event that hosts them — so the tab they need
+ * cannot be read off the stage list alone.
+ */
+export interface StageActivityFlags {
+  evaluation?: boolean;
+  negotiation?: boolean;
+}
+
 /** Tabs the event workspace shows, derived from the pattern rather than fixed. */
-export function workspaceTabs(stagesEnabled: Stage[]): string[] {
+export function workspaceTabs(
+  stagesEnabled: Stage[], activities: StageActivityFlags = {},
+): string[] {
   const tabs = ['Overview', 'Items & Lots'];
   if (stagesEnabled.some((s) => s === 'RFI' || s === 'RFP' || s === 'RFQ')) {
     tabs.push('Questionnaire');
@@ -221,8 +268,8 @@ export function workspaceTabs(stagesEnabled: Stage[]): string[] {
     // first of these, because every one of them has a deadline.
     tabs.push('Timeline', 'Bidders', 'Terms', 'Clarifications', 'Responses', 'Comparison');
   }
-  if (stagesEnabled.includes('EVALUATION')) tabs.push('Evaluation');
-  if (stagesEnabled.includes('NEGOTIATION')) tabs.push('Negotiation');
+  if (stagesEnabled.includes('EVALUATION') || activities.evaluation) tabs.push('Evaluation');
+  if (stagesEnabled.includes('NEGOTIATION') || activities.negotiation) tabs.push('Negotiation');
   if (stagesEnabled.includes('AUCTION')) tabs.push('Auction');
   tabs.push('Award');
   if (stagesEnabled.includes('APPROVAL')) tabs.push('Approvals');

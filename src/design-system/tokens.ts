@@ -1,9 +1,17 @@
 /**
- * Design tokens — Pack 00, Foundation file 1 of 3.
+ * Design tokens — the shadcn/ui palette, read by the screens that style inline.
  *
- * Values follow the Buyer Portal reference: a violet primary on a near-white
- * ground, 4px controls, Inter throughout. Changing them here moves every
- * screen at once, which is the only reason a token file is worth having.
+ * `global.css` declares the same values as CSS variables in shadcn's two-layer
+ * arrangement, which is what `bg-primary` and `text-muted-foreground` resolve
+ * to in the design-system components. This file is the second reading of that
+ * one palette, for the screens that still carry their own inline styles. The
+ * names here are the product's; the values are shadcn's zinc scale, with this
+ * product's violet kept as the primary because a component library does not
+ * get to decide the brand.
+ *
+ * Changing a value here moves every screen at once, which is the only reason a
+ * token file is worth having — and anything changed here must be changed in
+ * the `:root` block of `global.css` too, or the two readings disagree.
  *
  * Colour is never the only carrier of meaning: status is always colour + icon
  * + text, which is why every status map in the domain layer ships an icon.
@@ -13,41 +21,49 @@ import { BASE_CURRENCY } from '../domain/config';
 export { BASE_CURRENCY };
 
 export const color = {
+  /** --primary. The brand, kept through the shadcn move. */
   brandPrimary: '#6C5DD3',
   /** The pressed/hover step of the primary. */
   brandPrimaryStrong: '#5B4CC4',
-  brandPrimarySoft: '#F1EFFC',
+  /** --accent. */
+  brandPrimarySoft: '#F2F0FD',
   /** The border that sits on `brandPrimarySoft`. */
-  brandPrimaryTint: '#E4E0FA',
+  brandPrimaryTint: '#E3DFFA',
+  /** --card. */
   surface: '#FFFFFF',
-  surfacePage: '#FBFBFD',
-  /** Zebra striping and inset panels. */
-  rowAlt: '#F7F7FA',
-  border: '#E7E7EE',
-  borderStrong: '#CFCBDD',
-  textPrimary: '#1D1D22',
-  textSecondary: '#6E6E7A',
-  textMuted: '#9A9AA6',
-  textBody: '#33333B',
+  surfacePage: '#FAFAFA',
+  /** --muted. Zebra striping and inset panels. */
+  rowAlt: '#F4F4F5',
+  /** --border, --input. */
+  border: '#E4E4E7',
+  borderStrong: '#D4D4D8',
+  /** --foreground. */
+  textPrimary: '#09090B',
+  /** --muted-foreground. */
+  textSecondary: '#71717A',
+  textMuted: '#A1A1AA',
+  textBody: '#27272A',
   /** Near-black, for the one dark control on a screen. */
-  ink: '#141416',
-  success: '#2F9E62',
-  successSoft: '#E6F6EE',
-  successText: '#227A4A',
-  warning: '#F2A84E',
-  warningSoft: '#FFF6E0',
-  warningText: '#8A6100',
-  danger: '#E5484D',
-  dangerSoft: '#FDECEC',
-  dangerText: '#C13238',
-  info: '#2563EB',
-  infoSoft: '#EAF1FE',
-  infoText: '#1D4FD8',
-  accentPurple: '#7B5BA8',
-  accentPurpleSoft: '#EFEAF7',
-  accentPurpleText: '#60468A',
-  gold: '#B7791F',
-  neutralSoft: '#F1F1F4',
+  ink: '#18181B',
+  success: '#16A34A',
+  successSoft: '#F0FDF4',
+  successText: '#15803D',
+  warning: '#F59E0B',
+  warningSoft: '#FFFBEB',
+  warningText: '#B45309',
+  /** --destructive. */
+  danger: '#EF4444',
+  dangerSoft: '#FEF2F2',
+  dangerText: '#B91C1C',
+  info: '#3B82F6',
+  infoSoft: '#EFF6FF',
+  infoText: '#1D4ED8',
+  accentPurple: '#8B5CF6',
+  accentPurpleSoft: '#F5F3FF',
+  accentPurpleText: '#6D28D9',
+  gold: '#CA8A04',
+  /** --secondary. */
+  neutralSoft: '#F4F4F5',
 } as const;
 
 export const font = {
@@ -68,11 +84,15 @@ export const type = {
   micro: { fontSize: 11, fontWeight: 500 },
 } as const;
 
+/**
+ * shadcn's radius scale, from `--radius: 0.5rem`: `rounded-lg` on surfaces,
+ * `rounded-md` on controls.
+ */
 export const radius = {
-  card: 6,
-  control: 4,
+  card: 8,
+  control: 6,
   /** Nav rows and other soft-cornered strips. */
-  nav: 5,
+  nav: 6,
   pill: 999,
 } as const;
 
@@ -81,12 +101,19 @@ export const space = {
   xxs: 4, xs: 8, sm: 12, md: 16, lg: 24, xl: 32, xxl: 48,
 } as const;
 
-/** A 1px border does most of the work; shadow is minimal. */
+/**
+ * Tailwind's shadow scale, which is what shadcn's components carry: a 1px
+ * border does most of the work and the shadow only separates a surface from
+ * the one behind it.
+ */
 export const elevation = {
   none: 'none',
-  card: '0 1px 2px rgba(17,24,39,.05)',
-  raised: '0 1px 2px rgba(17,24,39,.14)',
-  overlay: '0 12px 40px rgba(17,24,39,.18)',
+  /** shadow-sm */
+  card: '0 1px 2px 0 rgb(0 0 0 / 0.05)',
+  /** shadow */
+  raised: '0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1)',
+  /** shadow-lg, for anything that floats over the page. */
+  overlay: '0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1)',
 } as const;
 
 export const density = {

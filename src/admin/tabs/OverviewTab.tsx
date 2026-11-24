@@ -13,7 +13,7 @@ import { AUCTION_STATUS_PRESENTATION } from '../../domain/statusMachine';
 import { rankLot } from '../../domain/auctionEngine';
 import { directionLabel } from '../../domain/comparator';
 import { resolve } from '../../domain/config';
-import { auctionFor, biddersForEvent, lotsForEvent, stageEventsOf, useStore } from '../../store/store';
+import { auctionFor, biddersForEvent, lotsForEvent, outSuppliers, stageEventsOf, useStore } from '../../store/store';
 import { issueStageEvent } from '../../domain/stageEvents';
 import { EVENT_STATUS_PRESENTATION } from '../../domain/statusMachine';
 import { COUNTERPARTY_NAMES, SCOPE_LINEAGE } from '../../data/seed';
@@ -67,6 +67,8 @@ export function OverviewTab({
       <div className="rfx-stack" style={{ gap: 14 }}>
         <FamilyCard eventId={eventId} onOpenEvent={onOpenEvent} />
 
+        <ApprovalStatus eventId={eventId} />
+
         {conditionalGate && (
           <ValidationBanner
             tone={conditionalGate.met ? 'warning' : 'info'}
@@ -96,7 +98,7 @@ export function OverviewTab({
               ['Category / BU', `${event.category} · ${event.businessUnit}`],
               ['Currency', event.currency],
               ['Estimated value', money(event.estimatedValue, event.currency)],
-              ['Envelope mode', event.envelopeMode === 'TWO_ENVELOPE' ? 'Two envelope (sealed commercial)' : 'Single envelope'],
+              ['Envelope mode', event.envelopeMode === 'TWO_ENVELOPE' ? 'Two envelope (sealed commercial)' : event.envelopeMode === 'NONE' ? 'No envelope (open, unsealed)' : 'Single envelope'],
               ['Created from', `${event.createdFrom}${event.sourceReference ? ` · ${event.sourceReference}` : ''}`],
               ['Owner', event.ownerId.replace('user-', '').toUpperCase()],
               ['Version', `v${event.version}`],
@@ -363,16 +365,34 @@ function FamilyCard({
                     })}`}
               </span>
               <span style={{ flex: 1 }} />
-              {ask.status === 'DRAFT' && (
-                <Button
-                  size="small"
-                  variant="secondary"
-                  onClick={() => issue(ask)}
-                  title="Send this ask to its shortlist now, rather than when the one before it closes."
-                >
-                  Issue now
-                </Button>
-              )}
+              {ask.status === 'DRAFT' && (() => {
+                // An ask goes only to those still in, so the one before it has to be decided first.
+                const order = asks.indexOf(ask);
+                const waitingOn = asks.slice(0, order).find((prev) =>
+                  state.responses.some((r) => r.eventId === prev.id && r.submittedAt !== null)
+                  && !state.technicalResults.some((r) => r.eventId === prev.id));
+                const out = new Set(outSuppliers(state, parent?.id ?? eventId));
+                const mine = state.bidders.filter((b) => b.eventId === ask.id);
+                const going = mine.filter((b) => !out.has(b.counterpartyId)).length;
+                return (
+                  <>
+                    <span style={{ fontSize: 11.5, color: color.textSecondary }}>
+                      {waitingOn ? `Publish the ${waitingOn.stagesEnabled[0]} technical result first` : `Invites ${going} of ${mine.length}`}
+                    </span>
+                    <Button
+                      size="small"
+                      variant="secondary"
+                      disabled={Boolean(waitingOn)}
+                      onClick={() => issue(ask)}
+                      title={waitingOn
+                        ? `Only suppliers who qualified at the ${waitingOn.stagesEnabled[0]} are invited, so its result has to be published first.`
+                        : 'Send this ask to the suppliers still in, now rather than when the one before it closes.'}
+                    >
+                      Issue now
+                    </Button>
+                  </>
+                );
+              })()}
               {!isThis && onOpenEvent && (
                 <Button size="small" variant="secondary" onClick={() => onOpenEvent(ask.id)}>
                   Open
@@ -383,5 +403,54 @@ function FamilyCard({
         })}
       </div>
     </Card>
+  );
+}
+
+/**
+ * Where an event held for approval stands, as the approvers on the Employee
+ * Portal have left it — and anything they asked while deciding.
+ */
+function ApprovalStatus({ eventId }: { eventId: string }) {
+  const { state, dispatch } = useStore();
+  const request = state.approvalRequests.find((r) => r.eventId === eventId);
+  if (!request) return null;
+  const notes = state.approvalNotes.filter((n) => n.key === `event:${request.id}`);
+  const lastHold = [...notes].reverse().find((n) => n.kind === 'HOLD' || n.kind === 'UNHOLD');
+  const onHold = request.status === 'PENDING' && lastHold?.kind === 'HOLD';
+  const current = request.steps.find((s) => s.decision === 'PENDING');
+  const questions = notes.filter((n) => n.kind === 'CLARIFICATION');
+  const tone = request.status === 'APPROVED' ? 'success' : request.status === 'DECLINED' ? 'error' : 'info';
+  const title = request.status === 'APPROVED' ? 'Approved by every level — released to suppliers'
+    : request.status === 'DECLINED' ? 'Declined — the event is back in draft and no supplier was invited'
+      : `Pending approval — with ${current?.holderName ?? 'the next level'}${onHold ? ' (on hold)' : ''}`;
+  return (
+    <ValidationBanner tone={tone} title={title}>
+      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', margin: '4px 0 6px' }}>
+        {request.steps.map((s) => (
+          <Chip
+            key={s.level}
+            tone={s.decision === 'APPROVED' ? 'success' : s.decision === 'DECLINED' ? 'danger' : s === current ? 'gold' : 'neutral'}
+            icon={s.decision === 'APPROVED' ? '✓' : s.decision === 'DECLINED' ? '✕' : undefined}
+          >
+            {s.level}. {s.holderName} · {s.role}
+          </Chip>
+        ))}
+      </div>
+      {request.steps.filter((s) => s.comment).map((s) => (
+        <div key={s.level} style={{ fontSize: 12 }}>{s.holderName}: “{s.comment}”</div>
+      ))}
+      {questions.length > 0 && (
+        <div style={{ fontSize: 12, marginTop: 4 }}>
+          {questions.map((q) => <div key={q.id}><strong>{q.byName}</strong> asked: “{q.text}”</div>)}
+        </div>
+      )}
+      {request.status === 'PENDING' && (
+        <div style={{ marginTop: 6 }}>
+          <Button size="small" variant="secondary" onClick={() => dispatch({ type: 'SET_SURFACE', surface: 'EMPLOYEE' })}>
+            Open the employee portal →
+          </Button>
+        </div>
+      )}
+    </ValidationBanner>
   );
 }

@@ -76,6 +76,30 @@ const CATALOGUES: Record<string, ItemFamily[]> = {
     { code: 'CAM', noun: 'Conference camera', variants: ['1080p fixed', '1080p PTZ', '4K fixed', '4K PTZ', '4K dual-lens', '360 tabletop', 'Huddle-room bar', 'Medium-room bar', 'Large-room bar', 'Ceiling microphone array'], uom: 'each', priceLow: 120, priceHigh: 3_800, qtyLow: 2, qtyHigh: 48, spec: 'Auto-framing, USB-C and PoE, wall and ceiling mount included' },
   ],
 
+  /*
+   * Software is bought by the seat and the year, not by the each.
+   *
+   * Which is why the units here are `user / year`, `endpoint / year` and
+   * `subscription / year` rather than quantities of a thing: a line that says
+   * "1 CRM" cannot be compared across suppliers, and a renewal priced per user
+   * is the only form in which an uplift cap means anything. The specifications
+   * carry residency, exit and uplift because those are the three places a
+   * software deal is actually won or lost, and they are what the IT Software
+   * question bank asks about.
+   */
+  'IT Software': [
+    { code: 'ERP', noun: 'ERP module', variants: ['Finance core', 'Accounts payable', 'Accounts receivable', 'Procurement', 'Inventory', 'Manufacturing', 'Project accounting', 'Fixed assets', 'Treasury', 'Group consolidation'], uom: 'user / year', priceLow: 180, priceHigh: 1_400, qtyLow: 20, qtyHigh: 600, spec: 'Named-user subscription, annual term, sandbox and production tenants included, renewal uplift capped at CPI' },
+    { code: 'CRM', noun: 'CRM subscription', variants: ['Sales professional', 'Sales enterprise', 'Service professional', 'Service enterprise', 'Field service', 'Marketing automation', 'Configure-price-quote', 'Partner portal', 'Customer portal', 'Revenue intelligence'], uom: 'user / year', priceLow: 300, priceHigh: 1_900, qtyLow: 25, qtyHigh: 450, spec: 'Data resident in-region, full data export on exit at no charge, sub-processor list published' },
+    { code: 'HRM', noun: 'HR platform module', variants: ['Core HR', 'Payroll', 'Time and attendance', 'Recruitment', 'Onboarding', 'Learning', 'Performance', 'Compensation planning', 'Workforce analytics', 'Employee helpdesk'], uom: 'employee / year', priceLow: 18, priceHigh: 140, qtyLow: 400, qtyHigh: 5_000, spec: 'Priced per employee on headcount at renewal, payroll statutory updates included for the term' },
+    { code: 'SEC', noun: 'Security software', variants: ['Endpoint detection and response', 'Extended detection and response', 'Email security gateway', 'Web proxy and data loss prevention', 'Identity and access management', 'Privileged access management', 'Vulnerability management', 'SIEM log ingest', 'Secrets management', 'Mobile device management'], uom: 'endpoint / year', priceLow: 14, priceHigh: 220, qtyLow: 500, qtyHigh: 7_500, spec: 'SOC 2 Type II report supplied annually, 24x7 incident response, breach notification within 24 hours' },
+    { code: 'COL', noun: 'Collaboration suite', variants: ['Mail and calendar', 'Office applications', 'Enterprise voice', 'Meetings and webinar', 'Document management', 'Electronic signature', 'Intranet', 'Whiteboarding', 'Translation', 'Archiving and eDiscovery'], uom: 'user / year', priceLow: 40, priceHigh: 380, qtyLow: 300, qtyHigh: 6_000, spec: 'Legal hold and eDiscovery export included, licences reassignable within 30 days of a leaver' },
+    { code: 'BIA', noun: 'Analytics platform', variants: ['BI viewer licence', 'BI author licence', 'Data warehouse credits', 'ETL pipeline', 'Data catalogue', 'Data quality', 'Reverse ETL', 'Embedded analytics', 'Planning and forecasting', 'Statistical workbench'], uom: 'licence / year', priceLow: 120, priceHigh: 2_600, qtyLow: 10, qtyHigh: 300, spec: 'Consumption reported monthly against a committed floor, unused credits roll for one quarter' },
+    { code: 'DEV', noun: 'Developer tooling', variants: ['Source control', 'CI runner minutes', 'Artifact registry', 'Static analysis', 'Software composition analysis', 'API gateway', 'Observability ingest', 'Feature flags', 'Load testing', 'IDE licences'], uom: 'seat / year', priceLow: 60, priceHigh: 900, qtyLow: 40, qtyHigh: 700, spec: 'Self-hosted runner option retained, no per-build overage without written approval' },
+    { code: 'ISM', noun: 'IT service management', variants: ['Incident and request', 'Change and release', 'Problem management', 'Asset management', 'Discovery', 'Configuration management database', 'Service catalogue', 'Knowledge base', 'Virtual agent', 'Integration hub'], uom: 'agent / year', priceLow: 400, priceHigh: 2_800, qtyLow: 15, qtyHigh: 260, spec: 'Fulfiller licences concurrent rather than named, unlimited requester accounts' },
+    { code: 'INT', noun: 'Integration platform', variants: ['iPaaS base subscription', 'Connector pack', 'Message broker', 'Event streaming', 'ESB runtime', 'EDI translator', 'Managed file transfer', 'Partner onboarding', 'Workflow orchestration', 'Robotic process automation bot'], uom: 'subscription / year', priceLow: 900, priceHigh: 26_000, qtyLow: 1, qtyHigh: 36, spec: 'Priced by environment, non-production environments at 25% of list, no charge for disaster recovery' },
+    { code: 'SUP', noun: 'Software support', variants: ['Standard 9x5', 'Enhanced 12x5', 'Premium 24x7', 'Mission critical 24x7', 'Designated support engineer', 'Extended maintenance year 1', 'Extended maintenance year 2', 'Upgrade assurance', 'Implementation support block', 'Health check and tuning'], uom: 'year', priceLow: 1_800, priceHigh: 58_000, qtyLow: 1, qtyHigh: 16, spec: 'Response and restoration targets with service credits, support fee held flat for the initial term' },
+  ],
+
   'Office & Administrative': [
     { code: 'PPR', noun: 'Copier paper', variants: ['A4 70gsm', 'A4 75gsm', 'A4 80gsm', 'A4 90gsm', 'A4 100gsm', 'A3 80gsm', 'A3 90gsm', 'A5 80gsm', 'Legal 80gsm', 'Letter 80gsm'], uom: 'ream', priceLow: 3.2, priceHigh: 12.4, qtyLow: 200, qtyHigh: 6_000, spec: 'FSC certified, 500 sheets, whiteness 161 CIE' },
     { code: 'MKR', noun: 'Marker', variants: ['whiteboard black', 'whiteboard assorted', 'permanent black', 'permanent assorted', 'highlighter yellow', 'highlighter assorted', 'flipchart assorted', 'fine-tip black', 'chisel-tip assorted', 'dry-wipe refillable'], uom: 'box', priceLow: 4.1, priceHigh: 22.5, qtyLow: 40, qtyHigh: 900, spec: 'Box of 10, low-odour, xylene free' },
@@ -185,11 +209,56 @@ interface RequestSpec {
   needBy: string;
   justification: string;
   lineCount: number;
+  /**
+   * Item family codes this requisition draws from. Omitted, it draws from the
+   * whole category.
+   *
+   * Needed the moment a requisition's title says what is in it. A broad title
+   * — "Group MRO catalogue" — is honest about a spread across every family,
+   * but "CRM and field service licences" that turns out to hold middleware and
+   * support contracts reads as a bug, and it is: the basket and the event
+   * raised from it would disagree with each other on screen.
+   */
+  families?: string[];
   profile: SourcingProfile;
   eventNumber: string | null;
 }
 
 const SPECS: RequestSpec[] = [
+  /*
+   * Software requisitions, approved and entirely unsourced.
+   *
+   * Every line is UNSOURCED on purpose: a line already out in an event cannot
+   * be put in a second one, so a requisition whose lines are all spoken for is
+   * readable but not usable. These four exist to be picked up and turned into
+   * events, which is the one thing the rest of the fixture — tuned to show
+   * requisitions at every stage of being consumed — was short of in software.
+   */
+  {
+    number: 'RQ-TGRANL-00132', title: 'Enterprise software renewals — FY26',
+    category: 'IT Software', superCategory: 'Technology', status: 'APPROVED',
+    submittedOn: '2026-01-12', requester: REQUESTERS.js,
+    businessUnit: 'Corporate Services', costCentre: 'CC-4420', needBy: '2026-06-30',
+    justification: 'Nine agreements fall due inside the same quarter. Sourcing them together is the only way to test the market before they roll over on the incumbent uplift.',
+    lineCount: 9, families: ['ERP', 'CRM', 'HRM', 'COL', 'ISM', 'SUP'],
+    profile: ALL_UNSOURCED, eventNumber: null,
+  },
+  {
+    number: 'RQ-TGRANL-00131', title: 'Security software consolidation — endpoint and identity',
+    category: 'IT Software', superCategory: 'Technology', status: 'APPROVED',
+    submittedOn: '2026-01-05', requester: REQUESTERS.ar,
+    businessUnit: 'Corporate Services', costCentre: 'CC-4418', needBy: '2026-05-31',
+    justification: 'Overlapping tools across the endpoint and identity estate, bought separately by three teams. Consolidating onto one platform at renewal.',
+    lineCount: 10, families: ['SEC'], profile: ALL_UNSOURCED, eventNumber: null,
+  },
+  {
+    number: 'RQ-TGRANL-00128', title: 'CRM and field service licences — new deployment',
+    category: 'IT Software', superCategory: 'Technology', status: 'APPROVED',
+    submittedOn: '2025-12-02', requester: REQUESTERS.bdu,
+    businessUnit: 'Business Development', costCentre: 'CC-3050', needBy: '2026-04-15',
+    justification: 'Replacing the spreadsheet-based pipeline ahead of the new financial year. Scope agreed with sales operations and the field service lead.',
+    lineCount: 5, families: ['CRM'], profile: ALL_UNSOURCED, eventNumber: null,
+  },
   {
     number: 'RQ-TGRANL-00130', title: 'Q1 laptop refresh — Bengaluru',
     category: 'IT Hardware', superCategory: 'Technology', status: 'APPROVAL',
@@ -231,6 +300,19 @@ const SPECS: RequestSpec[] = [
     businessUnit: 'Manufacturing', costCentre: 'CC-7120', needBy: '2026-06-15',
     justification: 'Planned shutdown in June; spares must be on site four weeks ahead of the outage window.',
     lineCount: 24, profile: ALL_UNSOURCED, eventNumber: null,
+  },
+  {
+    number: 'RQ-TGRANL-00123', title: 'Software estate rationalisation — group-wide',
+    category: 'IT Software', superCategory: 'Technology', status: 'PARTIALLY_SOURCED',
+    submittedOn: '2025-05-02', requester: REQUESTERS.adu,
+    businessUnit: 'Corporate Services', costCentre: 'CC-4420', needBy: '2026-10-31',
+    justification: 'Application portfolio review found 44 licensed products across seven business units. The analytics and collaboration lines went out in RFP-2025-021; the rest are still to be sourced.',
+    lineCount: 44,
+    profile: [
+      { state: 'AWARDED', share: 0.18 }, { state: 'IN_EVENT', share: 0.25 },
+      { state: 'ON_CONTRACT', share: 0.11 }, { state: 'UNSOURCED', share: 0.46 },
+    ],
+    eventNumber: 'RFP-2025-021',
   },
   {
     number: 'RQ-TGRANL-00122', title: 'Fleet tyre and maintenance programme',
@@ -395,10 +477,14 @@ function buildRequest(spec: RequestSpec, seed: number): {
     justification: spec.justification,
   };
 
-  const pool = combinations(CATALOGUES[spec.category]);
+  const catalogue = CATALOGUES[spec.category];
+  const families = spec.families
+    ? catalogue.filter((family) => spec.families?.includes(family.code))
+    : catalogue;
+  const pool = combinations(families);
   if (pool.length < spec.lineCount) {
     throw new Error(
-      `Catalogue "${spec.category}" offers ${pool.length} items but ${spec.number} needs ${spec.lineCount}.`,
+      `Catalogue "${spec.category}"${spec.families ? ` narrowed to ${spec.families.join(', ')}` : ''} offers ${pool.length} items but ${spec.number} needs ${spec.lineCount}.`,
     );
   }
 

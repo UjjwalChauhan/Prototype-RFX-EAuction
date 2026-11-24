@@ -17,7 +17,9 @@ import {
   unlockCommercial, type ViewerContext,
 } from '../../server/envelopeGuard';
 import { optionsOf } from '../../domain/questionTypes';
-import { useStore, biddersForEvent, responsesForEvent } from '../../store/store';
+import {
+  useStore, biddersForEvent, lineItemsForEvent, responsesForEvent,
+} from '../../store/store';
 import { COUNTERPARTY_NAMES, LINE_ITEMS, QUESTIONNAIRE } from '../../data/seed';
 import type { Envelope, EventBidder, Question } from '../../domain/types';
 
@@ -74,6 +76,9 @@ export function ResponsesTab({ eventId }: { eventId: string }) {
    * seeded set is the fallback for the demonstration event, which predates
    * event-level questionnaires.
    */
+  // The basket the per-line answers point at.
+  const lineItems = lineItemsForEvent(state, eventId);
+
   const questions = React.useMemo(() => {
     const family = new Set([eventId, ...state.events.filter((e) => e.parentEventId === eventId).map((e) => e.id)]);
     const own = state.questionnaires
@@ -323,23 +328,48 @@ export function ResponsesTab({ eventId }: { eventId: string }) {
               <div style={{ fontSize: 12, color: color.textSecondary }}>No response submitted.</div>
             ) : (
               <div className="rfx-stack" style={{ gap: 11 }}>
-                {technicalProjection.answers.map((answer) => {
-                  const question = questions.find((q) => q.id === answer.questionId);
-                  if (!question) return null;
-                  return (
-                    <div key={answer.questionId} style={{ borderBottom: `1px solid ${color.border}`, paddingBottom: 9 }}>
-                      <div style={{ fontSize: 11.5, color: color.textSecondary }}>{question.title}</div>
-                      <div style={{ fontSize: 13, fontWeight: 500, marginTop: 3 }}>
-                        {readAnswer(question, answer.value, Boolean(answer.attachmentName))}
+                {/*
+                  Grouped by question rather than listed answer by answer: a
+                  question asked per line comes back once per line, and a flat
+                  list repeats the same title six times with no clue which
+                  item each answer belongs to.
+                */}
+                {questions
+                  .map((question) => ({
+                    question,
+                    given: technicalProjection.answers.filter((a) => a.questionId === question.id),
+                  }))
+                  .filter(({ given }) => given.length > 0)
+                  .map(({ question, given }) => (
+                    <div key={question.id} style={{ borderBottom: `1px solid ${color.border}`, paddingBottom: 9 }}>
+                      <div style={{ fontSize: 11.5, color: color.textSecondary }}>
+                        {question.title}
+                        {question.askedPer === 'LINE' && (
+                          <span style={{ color: color.brandPrimary }}> · per line item</span>
+                        )}
                       </div>
-                      {answer.attachmentName && (
-                        <div style={{ fontSize: 11, color: color.brandPrimary, marginTop: 3 }}>
-                          📎 {answer.attachmentName}
-                        </div>
-                      )}
+                      {given.map((answer) => {
+                        const lineItem = lineItems.find((l) => l.id === answer.lineItemId);
+                        return (
+                          <div key={`${answer.questionId}-${answer.lineItemId ?? 'all'}`} style={{ marginTop: 3 }}>
+                            {lineItem && (
+                              <span style={{ fontSize: 11, color: color.textMuted, marginRight: 6 }}>
+                                {lineItem.itemCode}
+                              </span>
+                            )}
+                            <span style={{ fontSize: 13, fontWeight: 500 }}>
+                              {readAnswer(question, answer.value, Boolean(answer.attachmentName))}
+                            </span>
+                            {answer.attachmentName && (
+                              <span style={{ fontSize: 11, color: color.brandPrimary, marginLeft: 6 }}>
+                                📎 {answer.attachmentName}
+                              </span>
+                            )}
+                          </div>
+                        );
+                      })}
                     </div>
-                  );
-                })}
+                  ))}
               </div>
             )}
           </Card>
@@ -394,9 +424,15 @@ export function ResponsesTab({ eventId }: { eventId: string }) {
                 </div>
                 {commercialProjection.answers.map((answer) => {
                   const question = questions.find((q) => q.id === answer.questionId);
+                  const lineItem = lineItems.find((l) => l.id === answer.lineItemId);
                   return (
-                    <div key={answer.questionId} style={{ fontSize: 12 }}>
-                      <span style={{ color: color.textSecondary }}>{question?.title}: </span>
+                    <div
+                      key={`${answer.questionId}-${answer.lineItemId ?? 'all'}`}
+                      style={{ fontSize: 12 }}
+                    >
+                      <span style={{ color: color.textSecondary }}>
+                        {question?.title}{lineItem ? ` · ${lineItem.itemCode}` : ''}:{' '}
+                      </span>
                       <strong>{String(answer.value)}</strong>
                     </div>
                   );

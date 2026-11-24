@@ -23,7 +23,8 @@
  * That is why `category` is part of the key here rather than a label on it.
  */
 import {
-  deletionBlock, instantiateTemplate, templateUses, templatesFor, validateTemplate,
+  DEFAULT_SCORE_SCALE, deletionBlock, instantiateTemplate, templateUses, templatesFor,
+  validateTemplate,
 } from '../domain/questionnaireTemplates';
 import { defaultConfigFor } from '../domain/questionTypes';
 import { questionnaireIdFor } from '../domain/stageEvents';
@@ -145,6 +146,7 @@ function buildQuestion(
     rubric: typeof raw.rubric === 'string' ? raw.rubric : null,
     isKnockout: raw.isKnockout === true,
     allowAttachment: raw.allowAttachment === true,
+    askedPer: raw.askedPer === 'LINE' ? 'LINE' : 'VENDOR',
     config: (raw.config as TemplateQuestion['config']) ?? defaultConfigFor(type, id),
   };
 }
@@ -162,21 +164,68 @@ function buildTemplate(
   const categories = asStringArray(body.categories);
 
   const sectionsIn = Array.isArray(body.sections) ? body.sections : [];
+  const questionsIn = Array.isArray(body.questions) ? body.questions : [];
+
+  /**
+   * A section's weight is its budget, and a caller who gives none gets one
+   * large enough for what they sent.
+   *
+   * Defaulting to zero would refuse every template written by a caller who has
+   * not read about section budgets, for a rule they did not know they were
+   * breaking. Defaulting to the sum of the questions puts them exactly on
+   * budget, which is the state the editor nudges a buyer towards anyway.
+   */
   const sections: TemplateSection[] = sectionsIn.length === 0
-    ? [{ id: `${id}-sec-1`, name: 'General', sequence: 1 }]
+    // -1 here too: the implicit section a caller who sent no sections gets is
+    // budgeted from its contents like any other, or every such template would
+    // be refused for a budget the caller never knew it had.
+    ? [{ id: `${id}-sec-1`, name: 'General', sequence: 1, weight: -1, askedPer: 'VENDOR' }]
     : sectionsIn.map((raw, i) => {
       const section = asObject(raw) ?? {};
       return {
         id: asString(section.id) || `${id}-sec-${i + 1}`,
         name: asString(section.name, `Section ${i + 1}`),
         sequence: typeof section.sequence === 'number' ? section.sequence : i + 1,
+        weight: typeof section.weight === 'number' ? Math.max(0, section.weight) : -1,
+        askedPer: section.askedPer === 'LINE' ? ('LINE' as const) : ('VENDOR' as const),
       };
     });
 
-  const questionsIn = Array.isArray(body.questions) ? body.questions : [];
   const questions = questionsIn.map(
     (raw, i) => buildQuestion(asObject(raw) ?? {}, id, i + 1, sections),
   );
+
+  // -1 marks a section the caller left unweighted; fill it from its contents.
+  const implicit = sections.filter((section) => section.weight === -1);
+  for (const section of implicit) {
+    section.weight = questions
+      .filter((question) => question.sectionId === section.id && question.weight > 0
+        && question.scoringMethod !== 'NONE')
+      .reduce((sum, question) => sum + question.weight, 0);
+  }
+
+  /**
+   * Sections are shares of one score and have to total 100.
+   *
+   * A caller who left the weights implicit gets them scaled to 100 rather
+   * than refused for a rule they never saw — the shares they implied by the
+   * question weights are preserved, only the denominator changes. A caller
+   * who stated the weights is held to them: silently rewriting a number
+   * somebody typed is worse than telling them it does not add up.
+   */
+  if (implicit.length === sections.length) {
+    const total = sections.reduce((sum, section) => sum + section.weight, 0);
+    if (total > 0 && total !== 100) {
+      let spent = 0;
+      sections.forEach((section, index) => {
+        // The last section takes the rounding, so the total is exactly 100.
+        section.weight = index === sections.length - 1
+          ? 100 - spent
+          : Math.round((section.weight / total) * 100);
+        spent += section.weight;
+      });
+    }
+  }
 
   /**
    * Scope follows the categories unless the caller overrides it.
@@ -201,6 +250,9 @@ function buildTemplate(
     categories,
     sections,
     questions,
+    scoreScale: typeof body.scoreScale === 'number' && body.scoreScale > 0
+      ? body.scoreScale
+      : DEFAULT_SCORE_SCALE,
     status: (body.status as QuestionnaireTemplate['status']) ?? 'PUBLISHED',
     version: typeof body.version === 'number' ? body.version : 1,
     scopeType,
@@ -443,6 +495,10 @@ function attachQuestionnaire(
   const templateId = asString(input.templateId) || null;
   let name = asString(input.name);
   let questions: Question[];
+  let sections: TemplateSection[] = [];
+  let scoreScale = typeof input.scoreScale === 'number' && input.scoreScale > 0
+    ? input.scoreScale
+    : DEFAULT_SCORE_SCALE;
 
   if (templateId !== null) {
     const template = repository.template(templateId);
@@ -456,6 +512,11 @@ function attachQuestionnaire(
     const draft = instantiateTemplate(template, point, questionnaireId, category);
     name = name || draft.templateName;
     questions = draft.questions.map((q, i) => asEventQuestion(q, questionnaireId, i));
+    // The sections and the scale are part of the template, so they travel with
+    // it: an event that kept the grouping but not the budgets could show a
+    // score sheet it cannot label or weight.
+    sections = draft.sections;
+    if (typeof input.scoreScale !== 'number') scoreScale = draft.scoreScale;
   } else {
     const raw = Array.isArray(input.questions) ? input.questions : [];
     if (raw.length === 0) {
@@ -464,9 +525,16 @@ function attachQuestionnaire(
         [{ field: 'questions', message: 'A questionnaire with no questions asks for nothing.' }],
       );
     }
-    const sections: TemplateSection[] = [{ id: `${questionnaireId}-sec-1`, name: 'General', sequence: 1 }];
+    sections = [{
+      id: `${questionnaireId}-sec-1`, name: 'General', sequence: 1, weight: 0,
+      askedPer: 'VENDOR',
+    }];
     questions = raw.map((item, i) =>
       asEventQuestion(buildQuestion(asObject(item) ?? {}, questionnaireId, i + 1, sections), questionnaireId, i));
+    // One section holding everything, budgeted at what the questions carry.
+    sections[0].weight = questions
+      .filter((question) => question.weight > 0 && question.scoringMethod !== 'NONE')
+      .reduce((sum, question) => sum + question.weight, 0);
     name = name || `${point} questionnaire`;
   }
 
@@ -477,6 +545,8 @@ function attachQuestionnaire(
     category,
     name,
     sourceTemplateId: templateId,
+    sections,
+    scoreScale,
     questions,
   };
 

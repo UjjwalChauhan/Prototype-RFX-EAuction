@@ -350,6 +350,7 @@ function question(sequence: number) {
     rubric: null,
     isKnockout: false,
     allowAttachment: false,
+    askedPer: 'VENDOR' as const,
     config: {},
   };
 }

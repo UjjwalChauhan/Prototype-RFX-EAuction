@@ -13,19 +13,18 @@
 import React from 'react';
 import { color, radius } from '../design-system/tokens';
 import { Button, Chip } from '../design-system/components/primitives';
-import { lotsForEvent, termsForEvent, useStore } from '../store/store';
+import { lineItemsForEvent, lotsForEvent, termsForEvent, useStore } from '../store/store';
 import { ACKNOWLEDGEMENT_LABEL, paymentSummary } from '../domain/terms';
 import { serverNow } from '../server/clock';
 import { rehearsalOpen } from '../domain/auctionRehearsal';
 import {
-  REQUEST_LABELS, REQUEST_PURPOSE, askableQuestions, draftFromResponse, missingRequired,
-  questionnairesForBidder, submissionFor, timeRemaining, toAnswers, vendorSections,
+  REQUEST_LABELS, REQUEST_PURPOSE, askableQuestions, draftFromResponse,
+  missingRequired, questionnairesForBidder, submissionFor, supplierGroups, timeRemaining,
+  toAnswers, vendorSections,
   type AnswerDraft, type VendorItem, type VendorSection,
 } from '../domain/vendorPortal';
-import { optionsOf } from '../domain/questionTypes';
-import type {
-  Answer, Question, QuestionOption, Response, VendorInputPoint,
-} from '../domain/types';
+import { PortalPanel, SupplierQuestionnaire } from './SupplierForm';
+import type { Answer, Response, VendorInputPoint } from '../domain/types';
 
 export function PortalRequests({
   counterpartyId, points, heading, blurb, onEnterAuction,
@@ -302,15 +301,42 @@ export function RequestDetail({
   // An ask answers against the basket of the sourcing event that raised it,
   // so this resolves through the family rather than matching on event id.
   const lots = lotsForEvent(state, item.event.id);
+  /**
+   * The basket, for the questions that are asked per line. Resolved through
+   * the family for the same reason the lots are: an ask answers against the
+   * sourcing event that raised it, not against itself.
+   */
+  const lines = lineItemsForEvent(state, item.event.id);
   const terms = termsForEvent(state, item.event.id);
   // Grouped for display, flat for validation and submission — an answer belongs
   // to a question, and which questionnaire carried it changes nothing about it.
   const groups = React.useMemo(
-    () => questionnaires.map((q) => ({ questionnaire: q, questions: askableQuestions(q.questions) }))
+    () => questionnaires
+      .map((q) => ({
+        questionnaire: q,
+        // Narrowed to this supplier: a question the buyer tagged to three of
+        // six suppliers is not on the other three's form, and must not be
+        // counted against them as unanswered either.
+        questions: askableQuestions(q.questions, item.bidder.counterpartyId),
+        sectionGroups: supplierGroups(
+          q.questions, q.sections ?? [], lines, item.bidder.counterpartyId,
+        ),
+      }))
       .filter((group) => group.questions.length > 0),
-    [questionnaires],
+    [questionnaires, lines, item.bidder.counterpartyId],
   );
   const questions = React.useMemo(() => groups.flatMap((g) => g.questions), [groups]);
+  /**
+   * Every box to fill in — one per vendor-level question, and one per line for
+   * the questions asked per line. Validation and submission both work off
+   * this rather than off the question list, so a lead time given for three of
+   * six items is an incomplete submission here and not a gap the buyer finds
+   * at comparison.
+   */
+  const cells = React.useMemo(
+    () => groups.flatMap((group) => group.sectionGroups.flatMap((g) => g.cells)),
+    [groups],
+  );
 
   const submission = submissionFor(state.responses, item.event.id, item.bidder.id);
 
@@ -321,16 +347,16 @@ export function RequestDetail({
   const [draft, setDraft] = React.useState<AnswerDraft>(() => draftFromResponse(submission));
   const [showMissing, setShowMissing] = React.useState(false);
 
-  const setAnswer = (questionId: string, value: Answer['value']) =>
+  const setAnswer = (key: string, value: Answer['value']) =>
     setDraft((d) => ({
       ...d,
-      [questionId]: { value, attachmentName: d[questionId]?.attachmentName ?? null },
+      [key]: { value, attachmentName: d[key]?.attachmentName ?? null },
     }));
 
-  const setAttachment = (questionId: string, attachmentName: string | null) =>
+  const setAttachment = (key: string, attachmentName: string | null) =>
     setDraft((d) => ({
       ...d,
-      [questionId]: { value: d[questionId]?.value ?? null, attachmentName },
+      [key]: { value: d[key]?.value ?? null, attachmentName },
     }));
 
   // Opening an ask is itself information the buyer should have.
@@ -340,7 +366,7 @@ export function RequestDetail({
     }
   }, [item.active, item.bidder.id, item.bidder.participationStatus, dispatch]);
 
-  const missing = missingRequired(questions, draft);
+  const missing = missingRequired(cells, draft);
 
   const submit = () => {
     // A required question left blank stops the submission and is pointed at,
@@ -358,7 +384,7 @@ export function RequestDetail({
       bidderId: item.bidder.id,
       version: existing.length + 1,
       submittedAt: serverNow(),
-      answers: toAnswers(questions, draft),
+      answers: toAnswers(cells, draft),
       priceLines: [],
     };
     dispatch({ type: 'SUBMIT_RESPONSE', response });
@@ -429,20 +455,15 @@ export function RequestDetail({
                   <strong> {group.questionnaire.category}</strong> lines you were shortlisted for.
                 </div>
               )}
-              <div className="rfx-stack" style={{ gap: 20 }}>
-                {group.questions.map((question, i) => (
-                  <AnswerField
-                    key={question.id}
-                    index={offset + i + 1}
-                    question={question}
-                    entry={draft[question.id]}
-                    readOnly={!item.active}
-                    flagged={showMissing && missing.some((m) => m.id === question.id)}
-                    onValue={(value) => setAnswer(question.id, value)}
-                    onAttachment={(name) => setAttachment(question.id, name)}
-                  />
-                ))}
-              </div>
+              <SupplierQuestionnaire
+                groups={group.sectionGroups}
+                draft={draft}
+                readOnly={!item.active}
+                missingKeys={showMissing ? missing.map((m) => m.key) : []}
+                startIndex={offset}
+                onValue={setAnswer}
+                onAttachment={setAttachment}
+              />
             </PortalPanel>
           );
         })
@@ -554,9 +575,13 @@ export function RequestDetail({
               }}
             >
               <strong>
-                {missing.length} required {missing.length === 1 ? 'question is' : 'questions are'} unanswered.
+                {missing.length} required {missing.length === 1 ? 'answer is' : 'answers are'} missing.
               </strong>{' '}
-              {missing.map((m) => m.title).join(' · ')}
+              {/* Named by line where the gap is on a line, so the supplier is
+                  told which item is missing rather than which question. */}
+              {missing
+                .map((m) => (m.lineLabel === null ? m.question.title : `${m.question.title} — ${m.lineLabel}`))
+                .join(' · ')}
             </div>
           )}
           <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -574,244 +599,17 @@ export function RequestDetail({
 }
 
 /**
- * One question, with the control its type calls for.
+ * A question asked once per line.
  *
- * Read-only once the ask is closed rather than hidden: a supplier should be
- * able to see what they sent, which is half of why the Past pile exists.
+ * Rendered as one question with a row per item rather than as N questions,
+ * because that is what it is: the supplier is being asked the same thing
+ * about each line, and numbering it six times would make a six-line basket
+ * look like a sixty-question form.
+ *
+ * The line is named by its code and description — the supplier's own
+ * catalogue number is not in our system, so the buyer's reference is the only
+ * thing both sides can point at.
  */
-function AnswerField({
-  index, question, entry, readOnly, flagged, onValue, onAttachment,
-}: {
-  index: number;
-  question: Question;
-  entry: AnswerDraft[string] | undefined;
-  readOnly: boolean;
-  flagged: boolean;
-  onValue: (value: Answer['value']) => void;
-  onAttachment: (name: string | null) => void;
-}) {
-  const value = entry?.value ?? null;
-  // An event-level question carries its answer format optionally — a question
-  // copied from a template that never needed one simply has no options.
-  const options = optionsOf({ type: question.type, config: question.config ?? {} });
-  const inputStyle: React.CSSProperties = {
-    width: '100%', maxWidth: 520, border: `1px solid ${flagged ? color.danger : color.border}`,
-    borderRadius: radius.control, padding: '9px 11px', fontSize: 14.5,
-    background: readOnly ? color.neutralSoft : '#fff', color: color.textPrimary,
-  };
-
-  const control = () => {
-    if (readOnly) {
-      return (
-        <div style={{ fontSize: 14.5, fontWeight: 500 }}>
-          {formatAnswer(value, options) || <em style={{ color: color.textMuted }}>not answered</em>}
-        </div>
-      );
-    }
-
-    switch (question.type) {
-      case 'long_text':
-      case 'compliance_statement':
-        return (
-          <textarea
-            value={typeof value === 'string' ? value : ''}
-            onChange={(e) => onValue(e.target.value)}
-            rows={4}
-            style={{ ...inputStyle, resize: 'vertical' }}
-          />
-        );
-
-      case 'number':
-      case 'capacity_declaration':
-      case 'lead_time':
-        return (
-          <input
-            type="number"
-            value={value === null || value === undefined ? '' : String(value)}
-            onChange={(e) => onValue(e.target.value === '' ? null : Number(e.target.value))}
-            style={{ ...inputStyle, maxWidth: 220 }}
-          />
-        );
-
-      case 'date':
-        return (
-          <input
-            type="date"
-            value={typeof value === 'string' ? value : ''}
-            onChange={(e) => onValue(e.target.value)}
-            style={{ ...inputStyle, maxWidth: 220 }}
-          />
-        );
-
-      case 'yes_no':
-        return (
-          <div style={{ display: 'flex', gap: 8 }}>
-            {[true, false].map((option) => (
-              <button
-                key={String(option)}
-                type="button"
-                onClick={() => onValue(option)}
-                style={{
-                  border: `1px solid ${value === option ? color.brandPrimary : color.border}`,
-                  background: value === option ? color.brandPrimarySoft : '#fff',
-                  color: value === option ? color.brandPrimary : color.textBody,
-                  fontWeight: value === option ? 600 : 400,
-                  borderRadius: radius.control, padding: '9px 22px',
-                  fontSize: 14.5, cursor: 'pointer',
-                }}
-              >
-                {option ? 'Yes' : 'No'}
-              </button>
-            ))}
-          </div>
-        );
-
-      case 'multiple_choice': {
-        const chosen = Array.isArray(value) ? value : [];
-        return (
-          <div className="rfx-stack" style={{ gap: 7 }}>
-            {options.map((option) => (
-              <label
-                key={option.id}
-                style={{ display: 'flex', alignItems: 'center', gap: 9, fontSize: 14.5, cursor: 'pointer' }}
-              >
-                <input
-                  type="checkbox"
-                  checked={chosen.includes(option.id)}
-                  onChange={(e) =>
-                    onValue(
-                      e.target.checked
-                        ? [...chosen, option.id]
-                        : chosen.filter((id) => id !== option.id),
-                    )
-                  }
-                  style={{ width: 16, height: 16, accentColor: color.brandPrimary }}
-                />
-                {option.label}
-              </label>
-            ))}
-          </div>
-        );
-      }
-
-      default:
-        if (options.length > 0) {
-          return (
-            <select
-              value={typeof value === 'string' ? value : ''}
-              onChange={(e) => onValue(e.target.value || null)}
-              style={{ ...inputStyle, maxWidth: 360 }}
-            >
-              <option value="">Select…</option>
-              {options.map((option) => (
-                <option key={option.id} value={option.id}>{option.label}</option>
-              ))}
-            </select>
-          );
-        }
-        return (
-          <input
-            type="text"
-            value={typeof value === 'string' ? value : ''}
-            onChange={(e) => onValue(e.target.value)}
-            style={inputStyle}
-          />
-        );
-    }
-  };
-
-  const wantsAttachment = question.allowAttachment
-    || question.type === 'certificate'
-    || question.type === 'file_upload';
-
-  return (
-    <div>
-      <div style={{ display: 'flex', gap: 8, alignItems: 'baseline' }}>
-        <span style={{ fontSize: 13, color: color.textMuted, minWidth: 18 }}>{index}.</span>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 15, fontWeight: 500 }}>
-            {question.title}
-            {question.isRequired && <span style={{ color: color.dangerText, marginLeft: 5 }}>*</span>}
-          </div>
-          {question.helpText && (
-            <div style={{ fontSize: 13, color: color.textSecondary, marginTop: 3 }}>
-              {question.helpText}
-            </div>
-          )}
-          <div style={{ marginTop: 9 }}>{control()}</div>
-
-          {wantsAttachment && (
-            <div style={{ marginTop: 9, display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap' }}>
-              {entry?.attachmentName ? (
-                <>
-                  <span style={{ fontSize: 13.5, color: color.brandPrimary }}>
-                    📎 {entry.attachmentName}
-                  </span>
-                  {!readOnly && (
-                    <Button variant="tertiary" size="small" onClick={() => onAttachment(null)}>
-                      Remove
-                    </Button>
-                  )}
-                </>
-              ) : readOnly ? (
-                <span style={{ fontSize: 13, color: color.textMuted }}>No document attached</span>
-              ) : (
-                <label style={{ fontSize: 13.5, color: color.brandPrimary, cursor: 'pointer' }}>
-                  <input
-                    type="file"
-                    style={{ display: 'none' }}
-                    onChange={(e) => onAttachment(e.target.files?.[0]?.name ?? null)}
-                  />
-                  📎 Attach a document
-                </label>
-              )}
-            </div>
-          )}
-
-          {flagged && (
-            <div style={{ fontSize: 13, color: color.dangerText, marginTop: 6 }}>
-              This one is required.
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/** An answer as a person reads it, rather than as it is stored. */
-function formatAnswer(value: Answer['value'], options: QuestionOption[]): string {
-  if (value === null || value === undefined) return '';
-  if (typeof value === 'boolean') return value ? 'Yes' : 'No';
-  if (Array.isArray(value)) {
-    return value
-      .map((id) => options.find((o) => o.id === id)?.label ?? String(id))
-      .join(', ');
-  }
-  const option = options.find((o) => o.id === value);
-  return option ? option.label : String(value);
-}
-
-function PortalPanel({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <section
-      style={{
-        background: '#fff', border: `1px solid ${color.border}`,
-        borderRadius: radius.card, overflow: 'hidden',
-      }}
-    >
-      <div
-        style={{
-          padding: '12px 18px', borderBottom: `1px solid ${color.border}`,
-          fontSize: 15, fontWeight: 600,
-        }}
-      >
-        {title}
-      </div>
-      <div style={{ padding: 18 }}>{children}</div>
-    </section>
-  );
-}
 
 /** Counts for the shell's nav badges. */
 export function activeCounts(

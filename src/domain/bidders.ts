@@ -148,3 +148,139 @@ export function validateCoverage(
     };
   });
 }
+
+/**
+ * The shortlist, read back out of the per-line invitations.
+ *
+ * Invitations are recorded line by line, because that is the grain the buyer
+ * actually works at — one vendor prices the laptops and the monitors but not
+ * the network switch. Everything downstream still wants the shortlist per
+ * category, so it is derived here rather than kept as a second, drifting copy.
+ */
+export function biddersByCategory(
+  lines: { id: Id; category: string }[],
+  invitedByLine: Record<string, Id[]>,
+): Record<string, Id[]> {
+  const byCategory: Record<string, Id[]> = {};
+  for (const line of lines) {
+    const list = byCategory[line.category] ?? (byCategory[line.category] = []);
+    for (const id of invitedByLine[line.id] ?? []) {
+      if (!list.includes(id)) list.push(id);
+    }
+  }
+  return byCategory;
+}
+
+export interface LineCoverage {
+  id: Id;
+  itemCode: string;
+  description: string;
+  invitedIds: Id[];
+}
+
+/** Lists up to three codes, then says how many more there are. */
+function listCodes(codes: string[]): string {
+  if (codes.length <= 3) {
+    return codes.length < 2 ? codes.join('') : `${codes.slice(0, -1).join(', ')} and ${codes[codes.length - 1]}`;
+  }
+  return `${codes.slice(0, 3).join(', ')} and ${codes.length - 3} more`;
+}
+
+/**
+ * Whether every line has somebody to price it.
+ *
+ * Coverage per category is not enough once vendors are invited line by line:
+ * a category can hold four vendors and still contain one line nobody was
+ * ticked against, which is the line that goes out and comes back empty. So the
+ * check runs at the grain the invitation was made at.
+ */
+export function validateLineCoverage(
+  lines: LineCoverage[],
+  counterparties: Counterparty[],
+): CoverageIssue[] {
+  const byId = new Map(counterparties.map((c) => [c.id, c]));
+  const issues: CoverageIssue[] = [];
+
+  const bare = lines.filter((l) => l.invitedIds.length === 0);
+  if (bare.length > 0) {
+    const one = bare.length === 1;
+    issues.push({
+      category: '',
+      tone: 'error',
+      blocking: true,
+      message: one
+        ? `${bare[0].itemCode} ${bare[0].description} has no vendor invited — it would go out with nobody to price it.`
+        : `${listCodes(bare.map((l) => l.itemCode))} have no vendor invited — they would go out with nobody to price them.`,
+    });
+  }
+
+  const single = lines.filter((l) => l.invitedIds.length === 1);
+  if (single.length > 0) {
+    issues.push({
+      category: '',
+      tone: 'warning',
+      message: `${listCodes(single.map((l) => l.itemCode))} ${single.length === 1 ? 'has' : 'have'} a single bidder each — one vendor per line, no competition on price.`,
+    });
+  }
+
+  // A line everybody on it is provisional on is a line that can be bid and
+  // cannot be awarded. It is not the same failure as an empty line, so it is
+  // reported separately rather than folded into the count above.
+  const unawardable = lines.filter(
+    (l) => l.invitedIds.length > 0
+      && l.invitedIds.every((id) => byId.get(id)?.isProvisional !== false),
+  );
+  if (unawardable.length > 0) {
+    issues.push({
+      category: '',
+      tone: 'error',
+      blocking: true,
+      message: `Every vendor on ${listCodes(unawardable.map((l) => l.itemCode))} is provisional — those lines can be bid, but none of the bids could be awarded.`,
+    });
+  }
+
+  return issues;
+}
+
+/**
+ * The event's vendor roster, in one line for the readiness rail — and a
+ * separate warning for anyone sitting on the event without a line to price,
+ * since they would be published as an invitation to nothing.
+ */
+export function validateRoster(
+  vendorIds: Id[],
+  invitedIds: Id[],
+  counterparties: Counterparty[],
+): CoverageIssue[] {
+  const byId = new Map(counterparties.map((c) => [c.id, c]));
+  if (vendorIds.length === 0) {
+    return [{
+      category: '',
+      tone: 'error',
+      blocking: true,
+      message: 'No vendors on the event — add the suppliers who should price these lines.',
+    }];
+  }
+  const provisional = vendorIds.filter((id) => byId.get(id)?.isProvisional === true);
+  const issues: CoverageIssue[] = [{
+    category: '',
+    tone: 'success',
+    message: `${vendorIds.length} vendor${vendorIds.length === 1 ? '' : 's'} on the event · ${vendorIds.length - provisional.length} onboarded${provisional.length > 0 ? `, ${provisional.length} provisional` : ''}`,
+  }];
+  for (const id of provisional) {
+    issues.push({
+      category: '',
+      tone: 'warning',
+      message: `${byId.get(id)?.name ?? id} is provisional — they can be invited now, but a bid from them cannot be awarded until onboarding completes.`,
+    });
+  }
+  const idle = vendorIds.filter((id) => !invitedIds.includes(id));
+  if (idle.length > 0) {
+    issues.push({
+      category: '',
+      tone: 'warning',
+      message: `${idle.map((id) => byId.get(id)?.name ?? id).join(', ')} ${idle.length === 1 ? 'is' : 'are'} on the event but invited to no line, and would be published as an invitation to nothing.`,
+    });
+  }
+  return issues;
+}

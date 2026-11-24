@@ -49,7 +49,7 @@ function answered(): { state: AppState; eventId: string; who: string; question: 
     id: 'q-regions', questionnaireId: 'qn-1', sectionId: null, sequence: 1, code: 'Q1',
     type: 'multiple_choice', title: 'Regions you can serve', helpText: '', isRequired: true,
     envelope: 'TECHNICAL', weight: 0, scoringMethod: 'MANUAL', maxScore: 10, rubric: '',
-    isKnockout: false, allowAttachment: true,
+    isKnockout: false, allowAttachment: true, askedPer: 'VENDOR',
     config: {
       options: [
         { id: 'o-n', label: 'North', score: null, isDisqualifying: false, requiresDetail: false },

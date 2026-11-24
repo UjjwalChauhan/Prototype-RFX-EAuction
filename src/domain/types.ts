@@ -55,7 +55,7 @@ export type EventStatus =
   | 'ON_HOLD';
 
 export type CreatedFrom = 'PR' | 'INTAKE' | 'CONTRACT_EXPIRY' | 'SHORT_CLOSE' | 'MANUAL' | 'AGENT';
-export type EnvelopeMode = 'SINGLE' | 'TWO_ENVELOPE';
+export type EnvelopeMode = 'NONE' | 'SINGLE' | 'TWO_ENVELOPE';
 export type VendorInputPoint = 'INTAKE' | 'RFI' | 'RFP' | 'RFQ' | 'AUCTION' | 'NEGOTIATION';
 
 export interface SourcingEvent {
@@ -296,6 +296,8 @@ export type AwardStatus = 'NONE' | 'AWARDED' | 'PARTIALLY_AWARDED' | 'REGRETTED'
 
 export interface Counterparty {
   id: Id;
+  /** The vendor master number a buyer and an AP clerk both recognise. */
+  code: string;
   name: string;
   /** Compliance / categories / locations served. Distinct from performance. */
   onboardingRating: number;
@@ -345,6 +347,18 @@ export interface EventBidder {
 
 export type QuestionEnvelope = 'TECHNICAL' | 'COMMERCIAL' | 'GENERAL';
 export type ScoringMethod = 'MANUAL' | 'RULE' | 'AI_ASSISTED' | 'AI_AUTO' | 'NONE';
+
+/**
+ * Who a question is asked of — the supplier once, or the supplier per line.
+ *
+ * An RFI asks a company whether it holds ISO 9001. It asks that once: the
+ * answer cannot be different for the laptops and the monitors. It also asks
+ * whether each item meets the written specification, and that answer is
+ * different for every line in the basket. Collapsing the two is the reason
+ * buyers end up with a spreadsheet attached to question 14 — the form could
+ * not ask per line, so the supplier was asked to improvise a format.
+ */
+export type QuestionScope = 'VENDOR' | 'LINE';
 
 export type QuestionType =
   // basic
@@ -410,6 +424,29 @@ export interface QuestionConfig {
   body?: string;
 }
 
+/**
+ * Who a question is put to, where that is narrower than everyone.
+ *
+ * Null is not "none" — it is **everyone**, and the difference matters more
+ * than it looks. A question narrowed by listing all six suppliers is a
+ * coincidence that goes stale the moment a seventh is invited; a question
+ * marked for everyone is a rule that keeps being true. So the editor collapses
+ * a full list back to null rather than storing it, and a supplier added later
+ * is asked the question without anyone having to remember to tick them.
+ *
+ * Supplier ids are counterparty ids, which survive publish unchanged. Line ids
+ * are the buyer's own draft ids while the event is being written and the
+ * published line item ids afterwards — `createSourcingEvent` remaps them, and
+ * drops any that no longer point at a line rather than carrying a dangling
+ * reference that would silently unask the question.
+ */
+export interface QuestionAudience {
+  /** The suppliers asked. Null means every supplier invited to this ask. */
+  vendorIds: Id[] | null;
+  /** The lines asked about. Null means every line. Ignored at supplier grain. */
+  lineIds: Id[] | null;
+}
+
 export interface Question {
   id: Id;
   questionnaireId: Id;
@@ -429,9 +466,32 @@ export interface Question {
   rubric: string | null;
   isKnockout: boolean;
   allowAttachment: boolean;
+  /**
+   * Asked once of the supplier, or once per line in the basket. A line-level
+   * question produces one answer per line item and is scored as the average
+   * across them, so the section budget is spent once however many lines the
+   * event carries.
+   */
+  askedPer: QuestionScope;
   /** Answer format. Carried from the template the question came from. */
   config?: QuestionConfig;
+  /**
+   * Who this question is put to, when the buyer narrowed it. Absent — the
+   * ordinary case — means every supplier invited and every line in the basket.
+   */
+  askedOf?: QuestionAudience;
+  /**
+   * What evaluation does with the answer — the attribute that decides whether
+   * it gates, scores, is converted to rupees, or is only read. Absent, it is
+   * worked out from the question's type, weight and knockout flag, which is
+   * what every question written before this field existed relies on.
+   */
+  evalType?: QuestionEvalType;
 }
+
+/** How an answer affects the result. See the questionnaire design note, §4. */
+export type QuestionEvalType =
+  | 'KO' | 'SCORED' | 'INFO' | 'MONETISED' | 'LOADING' | 'PREFERENCE';
 
 export interface Questionnaire {
   id: Id;
@@ -460,6 +520,17 @@ export interface Questionnaire {
    * produces and what every questionnaire written before this was split.
    */
   category?: string | null;
+  /**
+   * The sections the questions were grouped under, copied from the template.
+   *
+   * Carried onto the event so the evaluation screen can report a score per
+   * section. Without it an event questionnaire knows which section each
+   * question belonged to and not what that section was called or worth, which
+   * is enough to group by and not enough to report.
+   */
+  sections?: TemplateSection[];
+  /** The scale scores on this questionnaire are read on. Defaults to 100. */
+  scoreScale?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -469,15 +540,42 @@ export interface Questionnaire {
 export type TemplateStatus = 'DRAFT' | 'PUBLISHED' | 'RETIRED';
 
 /**
- * Sections group questions; they do not carry their own weight. A section's
- * share is the sum of the scored questions inside it, so a declared weight
- * could disagree with its own contents — the same header/detail drift the
- * requisition amount is derived to avoid.
+ * Sections group questions, and carry a weight that is a **budget**, not a
+ * claim about their contents.
+ *
+ * The distinction is the whole design. A declared weight that was supposed to
+ * equal the sum of its questions is header/detail drift waiting to happen — the
+ * two disagree and nobody knows which is right. A declared weight that is a
+ * *ceiling* cannot drift: the questions inside allocate from it, the sum may be
+ * less but never more, and under-allocation is visible as unspent budget rather
+ * than as a contradiction.
+ *
+ * Scoring then runs off the question weights, not off this number. A section
+ * that declares 40 and allocates 30 contributes 30, and the editor says so —
+ * the alternative, holding the section to 40 and quietly making 10 of it
+ * unearnable, would mark every supplier down for the buyer's arithmetic.
  */
 export interface TemplateSection {
   id: Id;
   name: string;
   sequence: number;
+  /**
+   * The share of the technical score this section carries, as a percentage.
+   * Sections total 100 across a scored template, so a buyer reads a section's
+   * weight as the thing it actually is — a third of the decision, not "35" on
+   * a scale nobody declared. Zero means the section is not scored: it groups
+   * questions that only gather.
+   */
+  weight: number;
+  /**
+   * Who the questions in this section are put to.
+   *
+   * Scope lives on the section because that is how buyers already group their
+   * forms — "about your company" and "about each item" are different parts of
+   * the same questionnaire. A question follows its section, so the supplier
+   * meets one coherent block rather than a list that switches grain row by row.
+   */
+  askedPer: QuestionScope;
 }
 
 /**
@@ -509,8 +607,12 @@ export interface TemplateQuestion {
   rubric: string | null;
   isKnockout: boolean;
   allowAttachment: boolean;
+  /** Asked once of the supplier, or once per line in the basket. */
+  askedPer: QuestionScope;
   /** The answer format — which keys apply is decided by `type`. */
   config: QuestionConfig;
+  /** What evaluation does with the answer. Absent means it is worked out from the question. */
+  evalType?: QuestionEvalType;
 }
 
 export interface QuestionnaireTemplate {
@@ -529,6 +631,17 @@ export interface QuestionnaireTemplate {
   categories: string[];
   sections: TemplateSection[];
   questions: TemplateQuestion[];
+  /**
+   * The scale the buyer reads scores on — 100, 10, 5, or whatever this
+   * organisation's evaluators are used to.
+   *
+   * Chosen when the questionnaire is written, not when it is scored, because a
+   * scale decided afterwards changes what every committed score means. It is
+   * presentation over the same underlying weights: a section worth a third of
+   * the technical total reads 33.3 out of 100 or 3.3 out of 10, and the ranking
+   * is identical either way.
+   */
+  scoreScale: number;
   status: TemplateStatus;
   version: number;
   scopeType: ConfigScopeType;
@@ -573,6 +686,14 @@ export interface Answer {
   questionId: Id;
   value: string | number | boolean | string[] | null;
   attachmentName: string | null;
+  /**
+   * The line this answer is about, for a question asked per line.
+   *
+   * Absent or null on a vendor-level answer, which is every answer recorded
+   * before questions could be asked per line — so an old response reads
+   * correctly rather than looking like a line answer that lost its line.
+   */
+  lineItemId?: Id | null;
 }
 
 export interface Response {
@@ -592,6 +713,36 @@ export interface PriceLine {
   currency: string;
   leadTimeDays: number | null;
   notes: string | null;
+  /**
+   * What the supplier quoted beyond the headline unit price. All optional: a
+   * line written before the commercial evaluation existed carries none of
+   * them and reads as a plain unit price.
+   */
+  discountPct?: number;
+  /** Freight the supplier charges for this line, in the line's own currency. */
+  freight?: number;
+  /** GST rate the supplier applied, where it differs from the item's class. */
+  taxRate?: number;
+  moq?: number | null;
+  validityDays?: number | null;
+  /** The supplier's own extended value, which evaluation re-computes and checks. */
+  extendedValue?: number;
+  /**
+   * What the supplier typed, when it was not in the event currency.
+   * `unitPrice` then holds the same figure at the rate frozen at publish, so a
+   * screen that predates foreign-currency bids still reads a sensible number.
+   */
+  quotedCurrency?: string;
+  quotedUnitPrice?: number;
+  /** The supplier priced a different unit from the one asked for. */
+  quotedUom?: string;
+  /** Units of the asked-for UoM in one quoted unit. */
+  uomFactor?: number;
+  /** An offer in place of the specified item. Shown beneath, never ranked. */
+  alternateOf?: Id;
+  alternateNote?: string;
+  /** Where the line came from, when it was not typed by the supplier. */
+  source?: 'PORTAL' | 'ON_BEHALF' | 'EXTRACTED';
 }
 
 // ---------------------------------------------------------------------------
@@ -653,7 +804,22 @@ export interface CostComponent {
   source: string;
   /** AG-07 proposed this value; a human has not yet confirmed it. */
   agentProposed: boolean;
+  /** What kind of cost this is, so the panel can group and label it. */
+  kind?: CostComponentKind;
+  /**
+   * Where each bidder's value came from. A value the agent proposed is not
+   * applied to the evaluated cost until a person accepts or overrides it.
+   * Absent, the component's `agentProposed` flag stands for every bidder.
+   */
+  valueOrigin?: Record<Id, 'MANUAL' | 'MASTER' | 'AGENT'>;
+  /** What the component applies to. Absent means the whole bid. */
+  scope?: { type: 'BID' | 'LOT' | 'LINES'; ids: Id[] };
+  note?: string;
 }
+
+export type CostComponentKind =
+  | 'FREIGHT' | 'DUTY' | 'PACKAGING' | 'SWITCHING' | 'PAYMENT_TERMS'
+  | 'QUALITY' | 'WARRANTY' | 'CURRENCY_RISK' | 'CUSTOM';
 
 export type TransformationMode = 'NONE' | 'SUPPLIER_SPECIFIC' | 'TOTAL_COST_FORMULA';
 

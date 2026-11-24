@@ -41,10 +41,11 @@ import {
   describeTerms, validateTerms, type TermsDocument, type TermsDocumentInput,
 } from './terms';
 import { buildAuction, type BuiltAuction } from './auctionSetup';
+import { DEFAULT_SCORE_SCALE } from './questionnaireTemplates';
 import type {
   AuctionMechanism, CreatedFrom, EnvelopeMode, EventBidder, EventStatus, FeedbackPolicy, Id,
   IdentityPolicy, JourneyPatternId, LineItem, Lot, Question, Questionnaire, ServerMillis, Side,
-  SourcingEvent, Stage, VendorInputPoint,
+  SourcingEvent, Stage, TemplateSection, VendorInputPoint,
 } from './types';
 
 // ---------------------------------------------------------------------------
@@ -166,6 +167,10 @@ export interface QuestionnaireInput {
   questions: QuestionInput[];
   /** The library template this was started from, for provenance only. */
   sourceTemplateId?: Id | null;
+  /** The sections the questions sit in, with the weight each one allocates. */
+  sections?: TemplateSection[];
+  /** The scale this questionnaire's section and overall scores are read on. */
+  scoreScale?: number;
   /**
    * The category this questionnaire asks for. Omit it on an event that spans
    * one category; give it once per category on an event that spans several.
@@ -185,10 +190,33 @@ export type TermsInput = TermsDocumentInput[];
 /** Step 6. */
 export interface EvaluationInput {
   envelopeMode?: EnvelopeMode;
+  /** The mode each RFI / RFP / RFQ stage runs under. */
+  envelopeByStage?: Partial<Record<string, EnvelopeMode>>;
   technicalGate?: 'NONE' | 'MIN_SCORE' | 'PASS_FAIL' | 'BOTH';
   minTechnicalScore?: number;
   technicalWeight?: number;
   commercialWeight?: number;
+  /**
+   * Per stage: the gate, the rubric and who judges it. The two fields above
+   * remain the gate that decides who reaches price, which is what the
+   * comparison sheet reads; these are the whole ladder behind it.
+   */
+  stages?: StageEvaluationInput[];
+  blindTechnical?: boolean;
+  consensusMode?: 'SINGLE' | 'AVERAGE' | 'MODERATED';
+  divergenceThreshold?: number;
+  /** Unlocking the commercial envelope needs a second authorised user. */
+  unlockWitness?: boolean;
+  notifyTechnicalResult?: 'ON_PUBLISH' | 'AT_AWARD';
+}
+
+export interface StageEvaluationInput {
+  stage: VendorInputPoint;
+  gate: 'NONE' | 'MIN_SCORE' | 'PASS_FAIL' | 'BOTH';
+  minScore: number;
+  rubricId: string;
+  technicalEvaluatorIds: Id[];
+  commercialEvaluatorIds: Id[];
 }
 
 /**
@@ -530,10 +558,17 @@ function resolve(input: Partial<SourcingEventInput>): Resolved {
     terms: input.terms ?? [],
     evaluation: {
       envelopeMode: input.evaluation?.envelopeMode ?? 'SINGLE',
+      envelopeByStage: input.evaluation?.envelopeByStage ?? {},
       technicalGate: input.evaluation?.technicalGate ?? 'NONE',
       minTechnicalScore: input.evaluation?.minTechnicalScore ?? 0,
       technicalWeight: input.evaluation?.technicalWeight ?? 0,
       commercialWeight: input.evaluation?.commercialWeight ?? 0,
+      stages: input.evaluation?.stages ?? [],
+      blindTechnical: input.evaluation?.blindTechnical ?? true,
+      consensusMode: input.evaluation?.consensusMode ?? 'AVERAGE',
+      divergenceThreshold: input.evaluation?.divergenceThreshold ?? 20,
+      unlockWitness: input.evaluation?.unlockWitness ?? false,
+      notifyTechnicalResult: input.evaluation?.notifyTechnicalResult ?? 'AT_AWARD',
     },
     auction: {
       mechanism: input.auction?.mechanism ?? 'ENGLISH',
@@ -684,6 +719,11 @@ function buildQuestionnaire(
     name: questionnaire.name ?? `${STAGE_LABELS[stage]} questionnaire`,
     sourceTemplateId: questionnaire.sourceTemplateId ?? null,
     category: questionnaire.category ?? null,
+    // The sections and the scale travel with the questions. An event that kept
+    // the questions' section ids but not the sections themselves could group a
+    // score sheet and not label or weight it.
+    sections: questionnaire.sections ?? [],
+    scoreScale: questionnaire.scoreScale ?? DEFAULT_SCORE_SCALE,
     questions: questionnaire.questions
       .slice()
       .sort((a, b) => a.sequence - b.sequence)
@@ -727,6 +767,14 @@ function snapshot(resolved: Resolved, extra: Record<string, unknown> = {}) {
     softClose: resolved.auction.softClose,
     technicalGate: resolved.evaluation.technicalGate,
     minTechnicalScore: resolved.evaluation.minTechnicalScore,
+    technicalWeight: resolved.evaluation.technicalWeight,
+    commercialWeight: resolved.evaluation.commercialWeight,
+    evaluationStages: resolved.evaluation.stages,
+    blindTechnical: resolved.evaluation.blindTechnical,
+    consensusMode: resolved.evaluation.consensusMode,
+    divergenceThreshold: resolved.evaluation.divergenceThreshold,
+    unlockWitness: resolved.evaluation.unlockWitness,
+    notifyTechnicalResult: resolved.evaluation.notifyTechnicalResult,
     // What went out, in one line, so an approver reading the snapshot months
     // later does not have to reconstruct it from the documents.
     terms: describeTerms(resolved.terms),

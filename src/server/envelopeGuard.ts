@@ -38,7 +38,8 @@ export interface TechnicalProjection {
   bidderId: Id;
   /** "Bidder A" under blind technical; the real name otherwise. */
   displayLabel: string;
-  answers: { questionId: Id; value: unknown; attachmentName: string | null }[];
+  /** `lineItemId` is set on an answer to a question asked per line. */
+  answers: { questionId: Id; value: unknown; attachmentName: string | null; lineItemId: Id | null }[];
   /** Filenames that leak the bidder's identity under blind technical. */
   attachmentIdentityWarnings: string[];
 }
@@ -56,7 +57,12 @@ export function projectTechnical(
 
   const answers = response.answers
     .filter((a) => technicalIds.has(a.questionId))
-    .map((a) => ({ questionId: a.questionId, value: a.value, attachmentName: a.attachmentName }));
+    .map((a) => ({
+      questionId: a.questionId,
+      value: a.value,
+      attachmentName: a.attachmentName,
+      lineItemId: a.lineItemId ?? null,
+    }));
 
   // Blind mode must conceal identity across the list, the answers and
   // attachment metadata.
@@ -84,7 +90,7 @@ export interface CommercialProjection {
   bidderId: Id;
   displayLabel: string;
   priceLines: PriceLine[];
-  answers: { questionId: Id; value: unknown }[];
+  answers: { questionId: Id; value: unknown; lineItemId: Id | null }[];
 }
 
 /**
@@ -115,7 +121,7 @@ export function projectCommercial(
     priceLines: response.priceLines,
     answers: response.answers
       .filter((a) => commercialIds.has(a.questionId))
-      .map((a) => ({ questionId: a.questionId, value: a.value })),
+      .map((a) => ({ questionId: a.questionId, value: a.value, lineItemId: a.lineItemId ?? null })),
   };
 }
 

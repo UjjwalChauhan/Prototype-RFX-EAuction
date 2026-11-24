@@ -65,8 +65,15 @@ export const TERMS_TEMPLATES: TermsTemplate[] = [
     },
     clauses: [
       {
-        code: '3.1', title: 'Payment period',
-        text: 'Payment is made thirty days from goods receipt against a valid tax invoice quoting the purchase order number. An invoice that does not quote it is returned, and the period runs from resubmission.',
+        code: '3.1', title: 'Payment window',
+        // Written from the figures when the set is added to an event.
+        text: 'Undisputed invoices are settled thirty days from goods receipt.',
+        nonNegotiable: false,
+        fromPaymentFields: true,
+      },
+      {
+        code: '3.2', title: 'Invoicing',
+        text: 'An invoice quotes the purchase order number. One that does not is returned, and the period runs from resubmission.',
         nonNegotiable: false,
       },
       {
@@ -83,6 +90,7 @@ export const TERMS_TEMPLATES: TermsTemplate[] = [
   },
   {
     id: 'tt-payment-milestone',
+    summary: 'advance, milestones and retention',
     category: 'PAYMENT',
     title: 'Payment terms — milestone with advance and retention',
     version: '1.4',
@@ -95,8 +103,14 @@ export const TERMS_TEMPLATES: TermsTemplate[] = [
     },
     clauses: [
       {
-        code: '3.1', title: 'Milestone payment',
-        text: 'Payment is made forty-five days from certification of each milestone. A milestone is certified only when every deliverable listed against it has been accepted.',
+        code: '3.1', title: 'Payment window',
+        text: 'Payment is made forty-five days from certification of each milestone.',
+        nonNegotiable: false,
+        fromPaymentFields: true,
+      },
+      {
+        code: '3.5', title: 'Milestone certification',
+        text: 'A milestone is certified only when every deliverable listed against it has been accepted.',
         nonNegotiable: false,
       },
       {
@@ -113,6 +127,7 @@ export const TERMS_TEMPLATES: TermsTemplate[] = [
   },
   {
     id: 'tt-delivery',
+    summary: 'DDP to the named site',
     category: 'DELIVERY',
     title: 'Delivery, logistics and delay',
     version: '2.1',
@@ -139,6 +154,7 @@ export const TERMS_TEMPLATES: TermsTemplate[] = [
   },
   {
     id: 'tt-warranty',
+    summary: '12 months from acceptance',
     category: 'WARRANTY',
     title: 'Warranty and defects liability',
     version: '1.2',
@@ -160,6 +176,7 @@ export const TERMS_TEMPLATES: TermsTemplate[] = [
   },
   {
     id: 'tt-nda',
+    summary: 'signed, survives three years',
     category: 'CONFIDENTIALITY',
     title: 'Confidentiality undertaking',
     version: '1.0',
@@ -181,6 +198,7 @@ export const TERMS_TEMPLATES: TermsTemplate[] = [
   },
   {
     id: 'tt-compliance',
+    summary: 'code of conduct',
     category: 'COMPLIANCE',
     title: 'Supplier code of conduct, HSE and ESG',
     version: '4.0',
@@ -202,6 +220,7 @@ export const TERMS_TEMPLATES: TermsTemplate[] = [
   },
   {
     id: 'tt-bid-conditions',
+    summary: '90-day bid validity',
     category: 'BID',
     title: 'Conditions of bidding',
     version: '2.2',
@@ -222,6 +241,29 @@ export const TERMS_TEMPLATES: TermsTemplate[] = [
       {
         code: '2.6', title: 'Conduct',
         text: 'Collusion, bid rigging or any attempt to influence the evaluation disqualifies the bid and may end the commercial relationship.',
+        nonNegotiable: true,
+      },
+    ],
+  },
+  {
+    id: 'tt-force-majeure',
+    category: 'GENERAL',
+    title: 'Force majeure',
+    version: '1.3',
+    summary: 'events beyond either party\'s control',
+    defaultAppliesTo: ['RFP', 'RFQ'],
+    acknowledgement: 'ACCEPT',
+    allowDeviation: false,
+    suggestedBecause: 'Most published events in this category carry it; the one that did not had a late-delivery dispute with no clause to point to.',
+    clauses: [
+      {
+        code: '14.1', title: 'Events beyond control',
+        text: 'Neither party is liable for a delay caused by an event beyond its reasonable control, notified in writing within seven days of it starting.',
+        nonNegotiable: true,
+      },
+      {
+        code: '14.3', title: 'Prolonged force majeure',
+        text: 'Where the event lasts more than sixty days, either party may terminate the affected order on written notice without liability.',
         nonNegotiable: true,
       },
     ],

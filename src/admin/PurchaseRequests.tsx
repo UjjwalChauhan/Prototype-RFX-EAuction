@@ -544,7 +544,79 @@ function ConsolidatedBasket({ onNavigate }: { onNavigate: (route: Route) => void
   ];
 
   return (
-    <div className="rfx-stack" style={{ gap: 12 }}>
+    <div className="rfx-stack-flow" style={{ gap: 12 }}>
+      {/* The basket sits above the list, not under it. Selection happens at the
+          top of a four-page table, and a CTA parked below 50 rows is a CTA the
+          buyer has to go looking for. Sticky under the page head so it stays
+          reachable however far down the list they select. */}
+      {selected.length > 0 && (
+        <Card
+          style={{
+            position: 'sticky', top: 'var(--rfx-head-h, 72px)', zIndex: 15,
+            boxShadow: '0 6px 18px rgba(17,24,39,.10)',
+          }}
+        >
+          <div className="rfx-stack" style={{ gap: 10 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <strong style={{ fontSize: 13 }}>
+                {selected.length} {selected.length === 1 ? 'item' : 'items'} selected
+              </strong>
+              <span style={{ color: color.textMuted }}>·</span>
+              {basketCategories.map((category, i) => (
+                <Chip
+                  key={category}
+                  tone={mixedCategory ? (i === 0 ? 'gold' : 'neutral') : 'brand'}
+                  title={
+                    mixedCategory
+                      ? i === 0
+                        ? `The event will be raised under ${category}`
+                        : `Sourced under ${basketCategories[0]}, not ${category}`
+                      : undefined
+                  }
+                >
+                  {category}
+                </Chip>
+              ))}
+              <span style={{ color: color.textMuted }}>·</span>
+              <span style={{ fontSize: 12 }}>
+                from {requestNumbersIn(selected, requests).length} requisitions
+              </span>
+              <span style={{ color: color.textMuted }}>·</span>
+              <span style={{ fontSize: 12 }}>
+                {money(basketValue(selected), selected[0].currency)} indicative
+              </span>
+              <span style={{ flex: 1 }} />
+              <Button variant="tertiary" size="small" onClick={() => setSelectedIds([])}>
+                Clear
+              </Button>
+              <Button variant="primary" disabled={!validation.valid} onClick={initiateSourcing}>
+                Initiate sourcing →
+              </Button>
+            </div>
+
+            <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>
+              {requestNumbersIn(selected, requests).map((number) => (
+                <Chip key={number} tone="neutral">
+                  {number} ({selected.filter((l) => byRequestId.get(l.requestId)?.requestNumber === number).length})
+                </Chip>
+              ))}
+            </div>
+
+            {validation.errors.map((issue) => (
+              <ValidationBanner key={issue.code} tone="error" title={issue.message}>{''}</ValidationBanner>
+            ))}
+            {validation.warnings.map((issue) => (
+              <ValidationBanner key={issue.code} tone="warning" title={issue.message}>{''}</ValidationBanner>
+            ))}
+
+            <div style={{ fontSize: 11, color: color.textSecondary, lineHeight: 1.55 }}>
+              Initiating sourcing assigns a PRD number mapping this demand to its requisitions, and
+              opens the create-event wizard with the basics and every line already populated.
+            </div>
+          </div>
+        </Card>
+      )}
+
       <ValidationBanner tone="info" title="Every requisition line, across every requisition">
         A header list answers what has been asked for; it cannot answer what belongs in one event,
         because that spans requisitions. Select lines here — from as many requisitions as you like —
@@ -626,69 +698,6 @@ function ConsolidatedBasket({ onNavigate }: { onNavigate: (route: Route) => void
           </div>
         )}
       </Card>
-
-      {selected.length > 0 && (
-        <Card>
-          <div className="rfx-stack" style={{ gap: 10 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-              <strong style={{ fontSize: 13 }}>
-                {selected.length} {selected.length === 1 ? 'item' : 'items'} selected
-              </strong>
-              <span style={{ color: color.textMuted }}>·</span>
-              {basketCategories.map((category, i) => (
-                <Chip
-                  key={category}
-                  tone={mixedCategory ? (i === 0 ? 'gold' : 'neutral') : 'brand'}
-                  title={
-                    mixedCategory
-                      ? i === 0
-                        ? `The event will be raised under ${category}`
-                        : `Sourced under ${basketCategories[0]}, not ${category}`
-                      : undefined
-                  }
-                >
-                  {category}
-                </Chip>
-              ))}
-              <span style={{ color: color.textMuted }}>·</span>
-              <span style={{ fontSize: 12 }}>
-                from {requestNumbersIn(selected, requests).length} requisitions
-              </span>
-              <span style={{ color: color.textMuted }}>·</span>
-              <span style={{ fontSize: 12 }}>
-                {money(basketValue(selected), selected[0].currency)} indicative
-              </span>
-              <span style={{ flex: 1 }} />
-              <Button variant="tertiary" size="small" onClick={() => setSelectedIds([])}>
-                Clear
-              </Button>
-              <Button variant="primary" disabled={!validation.valid} onClick={initiateSourcing}>
-                Initiate sourcing →
-              </Button>
-            </div>
-
-            <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>
-              {requestNumbersIn(selected, requests).map((number) => (
-                <Chip key={number} tone="neutral">
-                  {number} ({selected.filter((l) => byRequestId.get(l.requestId)?.requestNumber === number).length})
-                </Chip>
-              ))}
-            </div>
-
-            {validation.errors.map((issue) => (
-              <ValidationBanner key={issue.code} tone="error" title={issue.message}>{''}</ValidationBanner>
-            ))}
-            {validation.warnings.map((issue) => (
-              <ValidationBanner key={issue.code} tone="warning" title={issue.message}>{''}</ValidationBanner>
-            ))}
-
-            <div style={{ fontSize: 11, color: color.textSecondary, lineHeight: 1.55 }}>
-              Initiating sourcing assigns a PRD number mapping this demand to its requisitions, and
-              opens the create-event wizard with the basics and every line already populated.
-            </div>
-          </div>
-        </Card>
-      )}
 
       <Modal
         open={confirmMixed}

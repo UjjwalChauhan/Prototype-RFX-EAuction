@@ -27,11 +27,10 @@ function VendorApp() {
         >
           {status === 'offline' ? (
             <>
-              <strong>Not connected to the buyer.</strong>{' '}
-              Nothing published since this page loaded has reached you, and what is on screen is
-              this portal’s own seeded data — which is why an event that exists on the buyer’s
-              platform can be missing here. The link is the buyer’s dev server on port 5180; start
-              it with <code>npm run dev</code>, or both at once with <code>npm run dev:all</code>.
+              <strong>This portal has lost its dev server.</strong>{' '}
+              What is on screen may be out of date, and nothing the buyer has published since is
+              reaching you. Start it again with <code>npm run dev:portal</code> (or{' '}
+              <code>npm run dev:all</code> for both) and reload.
             </>
           ) : 'Connecting to the buyer…'}
         </div>

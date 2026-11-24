@@ -9,12 +9,13 @@ import React from 'react';
 import { color, money } from '../design-system/tokens';
 import { Button, Chip, Pill } from '../design-system/components/primitives';
 import { KpiRow, StageRail, Tabs, type Kpi } from '../design-system/components/layout';
-import { EVENT_STATUS_PRESENTATION } from '../domain/statusMachine';
+import { EVENT_STATUS_PRESENTATION, canCloseEvent } from '../domain/statusMachine';
 import { JOURNEY_PATTERNS, buildStageRail, workspaceTabs } from '../domain/journeyPatterns';
 import { isStageEvent } from '../domain/stageEvents';
+import { StageSwitch, useStageScope } from './stageScope';
 import { rankLot } from '../domain/auctionEngine';
 import { formatCountdown, serverNow } from '../server/clock';
-import { auctionFor, biddersForEvent, responsesForEvent, useStore } from '../store/store';
+import { auctionFor, biddersForEvent, eventFamily, responsesForEvent, useStore } from '../store/store';
 import { OverviewTab } from './tabs/OverviewTab';
 import { ItemsLotsTab } from './tabs/ItemsLotsTab';
 import { BiddersTab } from './tabs/BiddersTab';
@@ -51,15 +52,18 @@ export function useEventWorkspace(
   activeTab: string | undefined,
   onNavigate: (route: Route) => void,
 ): WorkspaceChrome | null {
-  const { state } = useStore();
+  const { state, dispatch } = useStore();
+  const scope = useStageScope(state, eventId);
   const event = state.events.find((e) => e.id === eventId);
   if (!event) return null;
+  // The questionnaire, bidders and responses belong to one ask at a time.
+  const askId = scope.active?.id ?? eventId;
 
   const pattern = JOURNEY_PATTERNS[event.journeyPattern];
   const tabs = workspaceTabs(event.stagesEnabled);
   const tab = activeTab && tabs.includes(activeTab) ? activeTab : tabs[0];
 
-  const bidders = biddersForEvent(state, eventId);
+  const bidders = biddersForEvent(state, askId);
 
   // Stages the pattern does not include are shown as skipped, with a reason,
   // because the NFA has to record every stage that did not happen.
@@ -139,6 +143,21 @@ export function useEventWorkspace(
     }
   })();
 
+  // Once any supplier has answered, the buyer can close the event whenever they
+  // choose. Closing the umbrella closes every ask still running under it.
+  const hasResponse = responsesForEvent(state, eventId).some((r) => r.submittedAt !== null);
+  const canClose = hasResponse && canCloseEvent(event.status);
+  const closeEvent = () => {
+    if (!window.confirm('Close this event? Suppliers will no longer be able to respond.')) return;
+    const now = Date.now();
+    const family = new Set(eventFamily(state, eventId));
+    for (const e of state.events) {
+      if (family.has(e.id) && canCloseEvent(e.status)) {
+        dispatch({ type: 'UPDATE_EVENT', eventId: e.id, patch: { status: 'CLOSED', closesAt: now } });
+      }
+    }
+  };
+
   const goTab = (next: string) => onNavigate({ name: 'event', eventId, tab: next });
 
   /** Set when this event is an ask created under a sourcing event. */
@@ -157,13 +176,16 @@ export function useEventWorkspace(
         />
       )}
       {tab === 'Items & Lots' && <ItemsLotsTab eventId={eventId} />}
-      {tab === 'Questionnaire' && <QuestionnaireTab eventId={eventId} />}
+      {(tab === 'Questionnaire' || tab === 'Bidders' || tab === 'Responses' || tab === 'Comparison') && (
+        <StageSwitch scope={scope} currentStage={event.currentStage} />
+      )}
+      {tab === 'Questionnaire' && <QuestionnaireTab eventId={askId} />}
       {tab === 'Timeline' && <TimelineTab eventId={eventId} />}
-      {tab === 'Bidders' && <BiddersTab eventId={eventId} />}
+      {tab === 'Bidders' && <BiddersTab eventId={askId} />}
       {tab === 'Terms' && <TermsTab eventId={eventId} />}
       {tab === 'Clarifications' && <ClarificationsTab eventId={eventId} />}
-      {tab === 'Responses' && <ResponsesTab eventId={eventId} />}
-      {tab === 'Comparison' && <ComparisonTab eventId={eventId} />}
+      {tab === 'Responses' && <ResponsesTab eventId={askId} />}
+      {tab === 'Comparison' && <ComparisonTab key={askId} eventId={eventId} askId={scope.active?.id} />}
       {tab === 'Evaluation' && <EvaluationTab eventId={eventId} />}
       {tab === 'Negotiation' && <NegotiationTab eventId={eventId} />}
       {tab === 'Auction' && <AuctionTab eventId={eventId} />}
@@ -176,7 +198,7 @@ export function useEventWorkspace(
   const counts: Record<string, number | string> = {
     Bidders: bidders.length,
     Clarifications: state.clarifications.filter((c) => c.eventId === eventId && c.answer === null).length || '',
-    Responses: responsesForEvent(state, eventId).filter((r) => r.submittedAt !== null).length,
+    Responses: responsesForEvent(state, askId).filter((r) => r.submittedAt !== null).length,
   };
 
   return {
@@ -216,6 +238,10 @@ export function useEventWorkspace(
         />
         {event.side === 'SELL' && <Chip tone="purple" title="Sell-side: highest bid wins">SELL</Chip>}
         {event.envelopeMode === 'TWO_ENVELOPE' && <Chip tone="neutral" icon="🔒">two envelope</Chip>}
+        {event.envelopeMode === 'NONE' && <Chip tone="neutral">no envelope</Chip>}
+        {canClose && (
+          <Button variant="secondary" onClick={closeEvent}>Close event</Button>
+        )}
         {event.status === 'AUCTION_LIVE' && (
           <Button variant="primary" onClick={() => goTab('Auction')}>Open cockpit →</Button>
         )}

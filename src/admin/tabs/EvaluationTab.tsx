@@ -10,23 +10,50 @@
  */
 import React from 'react';
 import { color, money, radius, savingsColor, signedMoney } from '../../design-system/tokens';
-import { Chip, NumberInput, Segmented, Toggle } from '../../design-system/components/primitives';
+import { Button, Chip, NumberInput, Segmented, Toggle } from '../../design-system/components/primitives';
 import { Card, Progress, Table, type Column } from '../../design-system/components/layout';
 import { AgentCard, ValidationBanner } from '../../design-system/components/domain';
 import {
   DEFAULT_AWARD_COMPONENTS, awardScore, formulaText, priceScore,
   technicalScore, validateAwardScoreModel,
 } from '../../domain/evaluation';
-import { transformBid, transformationCoverage } from '../../domain/transformation';
+import { transformBid } from '../../domain/transformation';
 import { bestFirst } from '../../domain/comparator';
 import { rankLot } from '../../domain/auctionEngine';
-import { auctionFor, biddersForEvent, costComponentsFor, useStore } from '../../store/store';
+import { CommercialReview } from './CommercialReview';
+import { taskFor, useCommercialModel, type CommercialModel } from '../../store/commercialModel';
+import { assignmentOf, type StageAssignment } from '../../domain/employeePortal';
+import { SEEDED_EVALUATION } from '../../data/employees';
+import type { TrailEntry } from '../../domain/commercialEvaluation';
+import {
+  auctionFor, biddersForEvent, costComponentsFor, lineItemsForEvent, useStore,
+} from '../../store/store';
 import { COUNTERPARTY_NAMES, LINE_ITEMS, QUESTIONNAIRE } from '../../data/seed';
 import type { AwardScoreComponent, PriceScoreMethod } from '../../domain/types';
 
 type Pane = 'home' | 'technical' | 'commercial' | 'comparison';
 
+/**
+ * Finds the ask's evaluation setup and, where there is one, assembles its
+ * commercial model once, so the commercial pane and the comparison sheet read
+ * the same evaluated totals rather than each working out their own.
+ */
 export function EvaluationTab({ eventId }: { eventId: string }) {
+  const { state } = useStore();
+  const event = state.events.find((e) => e.id === eventId)!;
+  const found = assignmentOf(event, SEEDED_EVALUATION as Record<string, StageAssignment[]>);
+  if (!found) return <EvaluationBody eventId={eventId} model={null} />;
+  return <WithModel eventId={eventId} found={found} />;
+}
+
+function WithModel({ eventId, found }: { eventId: string; found: NonNullable<ReturnType<typeof assignmentOf>> }) {
+  const { state } = useStore();
+  const event = state.events.find((e) => e.id === eventId)!;
+  const model = useCommercialModel(taskFor(event, found.assignment, found.rules), 'LANDED');
+  return <EvaluationBody eventId={eventId} model={model} />;
+}
+
+function EvaluationBody({ eventId, model }: { eventId: string; model: CommercialModel | null }) {
   const { state } = useStore();
   const event = state.events.find((e) => e.id === eventId)!;
   const bidders = biddersForEvent(state, eventId);
@@ -54,10 +81,31 @@ export function EvaluationTab({ eventId }: { eventId: string }) {
     ? rankLot(held!.bids, held!.lots[0]?.id ?? '', event.side, held!.auction.antiGaming.tieBidPolicy)
     : [];
 
+  // Once the envelope is open, the evaluated totals come from the commercial evaluation itself — the
+  // same figures the evaluators and the buyer's commercial view read. Before then (or on an event with
+  // no evaluation set up) the schedule is summed as it always was.
+  const live = model !== null && model.unlocked ? model : null;
+  const sealed = model !== null && model.twoEnvelope && !model.unlocked;
+
   const commercialRows = bidders.map((bidder) => {
     const fromAuction = auctionRank.find((r) => r.bidderId === bidder.id);
+    const evaluated = live?.result.bids.find((b) => b.bidderId === bidder.id);
+    if (evaluated) {
+      return {
+        bidderId: bidder.id,
+        name: COUNTERPARTY_NAMES[bidder.counterpartyId],
+        masked: bidder.maskedLabel,
+        rawBid: evaluated.quotedTotal,
+        transformed: evaluated.transformed,
+        adjustment: evaluated.transformed - evaluated.quotedTotal,
+        trace: [],
+        trail: evaluated.trail as TrailEntry[],
+        rankable: evaluated.rankable,
+        commercialTerms: evaluated.commercialScore.score,
+      };
+    }
     const response = state.responses.find((r) => r.bidderId === bidder.id);
-    const scheduleTotal = (response?.priceLines ?? []).reduce((a, line) => {
+    const scheduleTotal = (response?.priceLines ?? []).filter((line) => !line.alternateOf).reduce((a, line) => {
       const item = LINE_ITEMS.find((l) => l.id === line.lineItemId);
       return a + line.unitPrice * (item?.quantity ?? 0);
     }, 0);
@@ -75,22 +123,27 @@ export function EvaluationTab({ eventId }: { eventId: string }) {
       transformed: transform.transformedValue,
       adjustment: transform.totalAdjustment,
       trace: transform.trace,
+      trail: undefined as TrailEntry[] | undefined,
+      rankable: true,
+      commercialTerms: null as number | null,
     };
   });
 
-  const allTransformed = commercialRows.map((r) => r.transformed);
+  const allTransformed = commercialRows.filter((r) => r.rankable).map((r) => r.transformed);
 
   const scoreRows = commercialRows
     .map((row) => {
       const technical = technicalResults.find((t) => t.bidderId === row.bidderId);
       const bidder = bidders.find((b) => b.id === row.bidderId)!;
-      const priceComponent = priceScore(row.transformed, allTransformed, priceMethod, event.side, 138_000);
+      const priceComponent = row.rankable
+        ? priceScore(row.transformed, allTransformed, priceMethod, event.side, 138_000)
+        : 0;
       const breakdown = awardScore(
         {
           price_score: priceComponent,
           technical_score: technical?.score ?? 0,
           // Commercial terms exclude price by construction.
-          commercial_terms_score: [86, 62, 48, 44][bidders.indexOf(bidder)] ?? 50,
+          commercial_terms_score: live ? row.commercialTerms ?? 0 : [86, 62, 48, 44][bidders.indexOf(bidder)] ?? 50,
           performance_rating: bidder.performanceRatingSnapshot,
           qualification_rating: bidder.qualificationSnapshot,
         },
@@ -102,17 +155,14 @@ export function EvaluationTab({ eventId }: { eventId: string }) {
         passesGate: technical?.passesGate ?? false,
         knockoutFailed: technical?.knockoutFailed ?? [],
         priceComponent,
+        rankable: row.rankable,
         total: breakdown.total,
         contributions: breakdown.contributions,
       };
     })
-    .sort((a, b) => b.total - a.total)
+    // A bid that fails a commercial knockout or is only part priced is shown, but not ranked.
+    .sort((a, b) => Number(b.rankable) - Number(a.rankable) || b.total - a.total)
     .map((row, i) => ({ ...row, rank: i + 1 }));
-
-  const coverage = transformationCoverage(
-    costComponentsFor(state, eventId),
-    bidders.map((b) => b.id),
-  );
 
   return (
     <div className="rfx-stack" style={{ gap: 14 }}>
@@ -265,89 +315,22 @@ export function EvaluationTab({ eventId }: { eventId: string }) {
       {pane === 'technical' && <TechnicalWorkspace eventId={eventId} />}
 
       {pane === 'commercial' && (
-        <>
-          {coverage.missing.length > 0 && (
-            <ValidationBanner tone="warning" title="Transformation coverage is incomplete">
-              {coverage.covered} of {coverage.total} bidders have a value for every cost component.
-              Missing: {coverage.missing.map((m) => m.component).join(', ')}. A partial transformation
-              ranks bidders on different bases.
-            </ValidationBanner>
-          )}
-
-          <Card
-            title="Bid transformation"
-            hint="Buyer-defined and bidder-specific. The bidder never sees the adjustment; ranking reads the transformed value."
-          >
-            <div className="rfx-stack" style={{ gap: 12 }}>
-              {commercialRows.map((row) => (
-                <div
-                  key={row.bidderId}
-                  style={{ border: `1px solid ${color.border}`, borderRadius: radius.control, padding: '11px 13px' }}
-                >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                    <span style={{ fontSize: 13, fontWeight: 600 }}>{row.name}</span>
-                    <Chip tone="neutral">{row.masked}</Chip>
-                    <span style={{ marginLeft: 'auto', fontSize: 12, color: color.textSecondary }}>
-                      quoted <strong style={{ color: color.textPrimary, fontVariantNumeric: 'tabular-nums' }}>
-                        {money(row.rawBid, event.currency)}
-                      </strong>
-                    </span>
-                    <span style={{ fontSize: 12, color: savingsColor(-row.adjustment) }}>
-                      {signedMoney(row.adjustment, event.currency)}
-                    </span>
-                    <span style={{ fontSize: 14, fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>
-                      = {money(row.transformed, event.currency)}
-                    </span>
-                  </div>
-
-                  {/* The full calculation trail — every component that moved the number. */}
-                  <div className="rfx-stack" style={{ marginTop: 9, gap: 4 }}>
-                    {row.trace.map((entry) => (
-                      <div
-                        key={entry.componentName}
-                        style={{
-                          display: 'flex', alignItems: 'center', gap: 10, fontSize: 11.5,
-                          color: color.textSecondary,
-                        }}
-                      >
-                        <span style={{ width: 150, flexShrink: 0 }}>{entry.componentName}</span>
-                        <Chip tone="neutral">{entry.basis.toLowerCase().replace('_', ' ')}</Chip>
-                        <span style={{ fontVariantNumeric: 'tabular-nums' }}>
-                          input {entry.basis === 'PERCENTAGE' ? `${entry.input}%` : money(entry.input, event.currency)}
-                        </span>
-                        <span style={{ marginLeft: 'auto', fontVariantNumeric: 'tabular-nums', color: entry.delta < 0 ? color.successText : color.textBody, fontWeight: 600 }}>
-                          {signedMoney(entry.delta, event.currency)}
-                        </span>
-                        <span style={{ width: 190, flexShrink: 0, fontSize: 10.5, textAlign: 'right' }}>
-                          {entry.source}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </Card>
-
-          <AgentCard
-            code="AG-07"
-            name="Commercial Normalisation"
-            autonomy="ACT_WITH_APPROVAL"
-            confidence={0.88}
-            summary="Freight, duty and payment-term NPV proposed from master data for all four bidders. AG-07 adjusts the buyer-side figure only — it cannot alter a supplier's quoted number."
-            evidence={[
-              { label: 'Freight lane table', detail: 'Origin-based standard rates, updated 3 weeks ago' },
-              { label: 'Duty schedule', detail: 'By country of origin' },
-              { label: 'Cost of capital', detail: '7.5% tenant rate for payment-term NPV' },
-            ]}
-            onAccept={() => undefined}
-            onModify={() => undefined}
-            onReject={() => undefined}
-          />
-        </>
+        <CommercialReview eventId={eventId} onGoTechnical={() => setPane('technical')} />
       )}
 
-      {pane === 'comparison' && (
+      {pane === 'comparison' && sealed && (
+        <ValidationBanner tone="info" title="The commercial envelope is sealed">
+          There is no comparison to show until the technical result is published and the commercial envelope is
+          unlocked. Prices are not readable here before then — by anyone.
+        </ValidationBanner>
+      )}
+      {pane === 'comparison' && live && !live.completed && (
+        <ValidationBanner tone="warning" title="Provisional — the commercial evaluation is not complete">
+          These evaluated totals are live and will move as the evaluators work. The sheet is final once the
+          commercial evaluation is completed.
+        </ValidationBanner>
+      )}
+      {pane === 'comparison' && !sealed && (
         <ComparisonSheet
           eventId={eventId}
           rows={scoreRows}
@@ -369,6 +352,9 @@ export function EvaluationTab({ eventId }: { eventId: string }) {
 function TechnicalWorkspace({ eventId }: { eventId: string }) {
   const { state, dispatch } = useStore();
   const bidders = biddersForEvent(state, eventId);
+  // The basket, so a question asked per line can be read line by line rather
+  // than as whichever answer happened to come back first.
+  const lineItems = lineItemsForEvent(state, eventId);
   const [activeBidderId, setActiveBidderId] = React.useState(bidders[0]?.id ?? '');
   const technical = QUESTIONNAIRE.questions.filter(
     (q) => q.envelope === 'TECHNICAL' && q.scoringMethod !== 'NONE',
@@ -423,24 +409,63 @@ function TechnicalWorkspace({ eventId }: { eventId: string }) {
         )}
 
         {technical.map((question) => {
-          const answer = response?.answers.find((a) => a.questionId === question.id);
+          const given = (response?.answers ?? []).filter((a) => a.questionId === question.id);
           const existing = scores.find((s) => s.questionId === question.id);
           return (
             <Card key={question.id} title={question.title} hint={question.code}>
               <div className="rfx-stack" style={{ gap: 10 }}>
+                {/*
+                  A question asked per line comes back with one answer per
+                  line, and the evaluator needs all of them before scoring —
+                  the score itself stays one per question, because what is
+                  being judged is the supplier's answer to the question, not
+                  each line separately.
+                */}
                 <div
                   style={{
                     background: color.neutralSoft, borderRadius: radius.control,
                     padding: '9px 11px', fontSize: 12.5,
                   }}
                 >
-                  <div style={{ fontSize: 10.5, color: color.textSecondary, marginBottom: 3 }}>Response</div>
-                  {answer ? String(answer.value) : <em style={{ color: color.textMuted }}>no answer</em>}
-                  {answer?.attachmentName && (
-                    <div style={{ fontSize: 11, color: color.brandPrimary, marginTop: 4 }}>
-                      📎 {answer.attachmentName}
+                  <div style={{ fontSize: 10.5, color: color.textSecondary, marginBottom: 3 }}>
+                    {question.askedPer === 'LINE'
+                      ? `Response · ${given.length} of ${lineItems.length} lines answered`
+                      : 'Response'}
+                  </div>
+                  {given.length === 0 && <em style={{ color: color.textMuted }}>no answer</em>}
+                  {question.askedPer === 'LINE' ? (
+                    <div className="rfx-stack" style={{ gap: 5 }}>
+                      {lineItems.map((lineItem) => {
+                        const answer = given.find((a) => a.lineItemId === lineItem.id);
+                        return (
+                          <div key={lineItem.id} style={{ display: 'flex', gap: 8, alignItems: 'baseline' }}>
+                            <span style={{ fontSize: 10.5, color: color.textSecondary, minWidth: 92 }}>
+                              {lineItem.itemCode}
+                            </span>
+                            <span style={{ flex: 1, minWidth: 0 }}>
+                              {answer
+                                ? String(answer.value)
+                                : <em style={{ color: color.textMuted }}>not answered</em>}
+                              {answer?.attachmentName && (
+                                <span style={{ fontSize: 11, color: color.brandPrimary, marginLeft: 6 }}>
+                                  📎 {answer.attachmentName}
+                                </span>
+                              )}
+                            </span>
+                          </div>
+                        );
+                      })}
                     </div>
-                  )}
+                  ) : given[0] ? (
+                    <>
+                      {String(given[0].value)}
+                      {given[0].attachmentName && (
+                        <div style={{ fontSize: 11, color: color.brandPrimary, marginTop: 4 }}>
+                          📎 {given[0].attachmentName}
+                        </div>
+                      )}
+                    </>
+                  ) : null}
                 </div>
 
                 {question.rubric && (
@@ -509,17 +534,34 @@ function TechnicalWorkspace({ eventId }: { eventId: string }) {
                   </div>
                 )}
 
-                {question.scoringMethod === 'AI_ASSISTED' && (
+                {question.scoringMethod === 'AI_ASSISTED' && (() => {
+                  /**
+                   * The agent reads every answer the question produced. On a
+                   * question asked per line that is one figure per line, and
+                   * a summary quoting only the first would be the agent
+                   * citing evidence it did not use.
+                   */
+                  const quoted = given.length === 0
+                    ? '—'
+                    : given
+                      .map((a) => {
+                        const lineItem = lineItems.find((l) => l.id === a.lineItemId);
+                        return lineItem ? `${lineItem.itemCode} ${String(a.value)}` : String(a.value);
+                      })
+                      .join(' · ');
+                  return (
                   <AgentCard
                     code="AG-06"
                     name="Technical Evaluation"
                     autonomy="SUGGEST"
                     confidence={0.81}
-                    summary={`Proposed score 8 of 10. Declared capacity of ${answer ? String(answer.value) : '—'} reams/month exceeds the 1,000/month requirement with headroom, but no third-party verification was attached.`}
+                    summary={question.askedPer === 'LINE'
+                      ? `Proposed score 8 of 10. Declared capacity covers ${given.length} of ${lineItems.length} lines and clears the quantity on each, but no third-party verification was attached.`
+                      : `Proposed score 8 of 10. Declared capacity of ${quoted} exceeds the requirement with headroom, but no third-party verification was attached.`}
                     evidence={[
-                      { label: 'Answer text', detail: `"${answer ? String(answer.value) : ''} reams per month"` },
+                      { label: 'Answer text', detail: quoted },
                       { label: 'capacity-*.xlsx, sheet 2', detail: 'Monthly output table' },
-                      { label: 'Requirement', detail: '1,000 reams/month from the line items' },
+                      { label: 'Requirement', detail: 'The quantity on each line item' },
                     ]}
                     onAccept={() =>
                       dispatch({
@@ -538,7 +580,8 @@ function TechnicalWorkspace({ eventId }: { eventId: string }) {
                     onModify={() => undefined}
                     onReject={() => undefined}
                   />
-                )}
+                  );
+                })()}
               </div>
             </Card>
           );
@@ -588,6 +631,9 @@ interface ScoreRow {
   technical: number;
   passesGate: boolean;
   priceComponent: number;
+  /** False for a bid that fails a commercial knockout or is part priced — shown, not ranked. */
+  rankable: boolean;
+  trail?: TrailEntry[];
   total: number;
   contributions: { key: string; label: string; weight: number; score: number; contribution: number }[];
 }
@@ -605,6 +651,8 @@ function ComparisonSheet({
 }) {
   const { state } = useStore();
   const event = state.events.find((e) => e.id === eventId)!;
+  const [trailFor, setTrailFor] = React.useState<string | null>(null);
+  const trailRow = rows.find((r) => r.bidderId === trailFor);
 
   // Graceful degradation: sections whose stage did not run are hidden, not
   // rendered empty.
@@ -669,11 +717,17 @@ function ComparisonSheet({
       ),
     },
     {
-      key: 'flags', header: '', width: '120px',
+      key: 'flags', header: '', width: '190px',
       render: (row) => (
-        <span style={{ display: 'inline-flex', gap: 4 }}>
-          {row.rank === 1 && <Chip tone="gold" icon="★">recommended</Chip>}
+        <span style={{ display: 'inline-flex', gap: 4, flexWrap: 'wrap' }}>
+          {row.rank === 1 && row.rankable && <Chip tone="gold" icon="★">recommended</Chip>}
+          {!row.rankable && <Chip tone="danger" icon="✕" title="Fails a commercial knockout or is only part priced, so it is not ranked on price">not ranked</Chip>}
           {!row.passesGate && <Chip tone="danger" icon="✕">below gate</Chip>}
+          {row.trail && (
+            <Button size="small" variant="secondary" onClick={() => setTrailFor(trailFor === row.bidderId ? null : row.bidderId)}>
+              {trailFor === row.bidderId ? 'Hide trail' : 'Trail'}
+            </Button>
+          )}
         </span>
       ),
     },
@@ -753,6 +807,25 @@ function ComparisonSheet({
           rowStyle={(row) => (row.rank === 1 ? { background: '#F0FDF4' } : undefined)}
         />
       </Card>
+
+      {trailRow?.trail && (
+        <Card title={`Calculation trail — ${trailRow.name}`} hint="Every component that moved this bidder’s number, carried from the commercial evaluation.">
+          <div className="rfx-stack" style={{ gap: 4 }}>
+            {trailRow.trail.map((entry) => {
+              const strong = entry.kind === 'QUOTED' || entry.kind === 'RESULT';
+              return (
+                <div key={entry.id} style={{ display: 'grid', gridTemplateColumns: 'minmax(170px,1fr) minmax(0,1.6fr) 150px', gap: 10, fontSize: 12, fontWeight: strong ? 700 : 400 }}>
+                  <span>{entry.label}</span>
+                  <span style={{ color: color.textSecondary, fontWeight: 400 }}>{entry.detail}</span>
+                  <span style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+                    {strong ? money(entry.amount, event.currency) : signedMoney(entry.amount, event.currency)}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </Card>
+      )}
 
       {/* Section 3 — line-item comparison grid */}
       {hasCommercial && (

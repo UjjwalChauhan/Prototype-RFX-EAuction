@@ -25,7 +25,7 @@ function question(over: Partial<TemplateQuestion> = {}): TemplateQuestion {
     id: 'q1', templateId: 't1', sectionId: 's1', sequence: 1, code: 'A.ONE',
     type: 'short_text', title: 'A question', helpText: '', isRequired: true,
     envelope: 'TECHNICAL', weight: 10, scoringMethod: 'MANUAL', maxScore: 10,
-    rubric: null, isKnockout: false, allowAttachment: false, ...over,
+    rubric: null, isKnockout: false, allowAttachment: false, askedPer: 'VENDOR', ...over,
     config: over.config ?? defaultConfigFor(over.type ?? 'short_text', over.id ?? 'q1'),
   };
 }
@@ -34,8 +34,9 @@ function template(over: Partial<QuestionnaireTemplate> = {}): QuestionnaireTempl
   return {
     id: 't1', code: 'QT-RFI-X', name: 'A template', description: '',
     appliesTo: ['RFI'], categories: [],
-    sections: [{ id: 's1', name: 'General', sequence: 1 }],
+    sections: [{ id: 's1', name: 'General', sequence: 1, weight: 10, askedPer: 'VENDOR' }],
     questions: [question()],
+    scoreScale: 100,
     status: 'PUBLISHED', version: 1, scopeType: 'TENANT', scopeId: 'tenant-udaan',
     createdBy: 'u1', createdAt: 0, ...over,
   };
@@ -375,7 +376,8 @@ describe('the seeded library', () => {
     const result = validateTemplate(broken);
     expect(result.valid).toBe(false);
     expect(result.errors.map((e) => e.code).sort()).toEqual([
-      'COMMERCIAL_AT_RFI', 'PRICE_CARRIES_WEIGHT', 'WEIGHT_WITHOUT_SCORING',
+      'COMMERCIAL_AT_RFI', 'PRICE_CARRIES_WEIGHT', 'SECTION_WEIGHTS_NOT_100',
+      'WEIGHT_WITHOUT_SCORING',
     ]);
   });
 

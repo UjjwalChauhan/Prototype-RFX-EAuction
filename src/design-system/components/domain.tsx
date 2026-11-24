@@ -8,7 +8,8 @@
  * colour — all four are here or alongside.
  */
 import React from 'react';
-import { color, elevation, font, radius } from '../tokens';
+import { color, font, radius } from '../tokens';
+import { cn } from '../cn';
 import { Button, Chip } from './primitives';
 import { TRAFFIC_BAND_PRESENTATION, type TrafficBand } from '../../domain/feedbackPolicy';
 import { formatCountdown, serverNow } from '../../server/clock';
@@ -30,10 +31,10 @@ export interface ValidationItem {
 
 const VALIDATION_TONE: Record<ValidationTone, { icon: string; fg: string; bg: string; border: string }> = {
   // Borders are the reference's chip borders: one step darker than the fill.
-  error: { icon: '✕', fg: color.dangerText, bg: color.dangerSoft, border: '#F6CFD0' },
-  warning: { icon: '●', fg: color.warningText, bg: color.warningSoft, border: '#F1DDA6' },
-  info: { icon: 'ⓘ', fg: color.infoText, bg: color.infoSoft, border: '#CFDDFB' },
-  success: { icon: '✓', fg: color.successText, bg: color.successSoft, border: '#C7EBD7' },
+  error: { icon: '✕', fg: color.dangerText, bg: color.dangerSoft, border: '#FECACA' },
+  warning: { icon: '●', fg: color.warningText, bg: color.warningSoft, border: '#FDE68A' },
+  info: { icon: 'ⓘ', fg: color.infoText, bg: color.infoSoft, border: '#BFDBFE' },
+  success: { icon: '✓', fg: color.successText, bg: color.successSoft, border: '#BBF7D0' },
 };
 
 export function ValidationBanner({ tone, title, children, action }: {
@@ -43,17 +44,18 @@ export function ValidationBanner({ tone, title, children, action }: {
   return (
     <div
       role={tone === 'error' ? 'alert' : 'status'}
-      style={{
-        display: 'flex', alignItems: 'flex-start', gap: 10,
-        background: t.bg, border: `1px solid ${t.border}`,
-        borderRadius: radius.control, padding: '10px 13px',
-      }}
+      className="flex items-start gap-2.5 rounded-md border px-3 py-2.5"
+      style={{ background: t.bg, borderColor: t.border }}
     >
-      <span aria-hidden style={{ color: t.fg, fontWeight: 700, fontSize: 13, lineHeight: '18px' }}>{t.icon}</span>
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 12.5, fontWeight: 600, color: t.fg }}>{title}</div>
+      <span aria-hidden className="text-[13px] font-bold leading-[18px]" style={{ color: t.fg }}>
+        {t.icon}
+      </span>
+      <div className="min-w-0 flex-1">
+        <div className="text-[12.5px] font-semibold leading-none tracking-tight" style={{ color: t.fg }}>
+          {title}
+        </div>
         {children && (
-          <div style={{ fontSize: 12, color: color.textBody, marginTop: 3, lineHeight: 1.5 }}>{children}</div>
+          <div className="mt-1.5 text-xs leading-relaxed" style={{ color: color.textBody }}>{children}</div>
         )}
       </div>
       {action}
@@ -107,29 +109,20 @@ export function Modal({
       aria-modal="true"
       aria-label={title}
       onClick={onClose}
-      style={{
-        position: 'fixed', inset: 0, background: 'rgba(17,24,39,.42)',
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        padding: 20, zIndex: 500,
-      }}
+      className="fixed inset-0 z-[500] flex items-center justify-center bg-black/50 p-5 backdrop-blur-[1px]"
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        style={{
-          background: '#fff', borderRadius: radius.card, boxShadow: elevation.overlay,
-          width: '100%', maxWidth: width, maxHeight: '86vh', overflow: 'auto',
-        }}
+        className="max-h-[86vh] w-full overflow-auto rounded-lg border border-border bg-background shadow-lg"
+        style={{ maxWidth: width }}
       >
-        <header style={{ padding: '15px 18px', borderBottom: `1px solid ${color.border}` }}>
-          <div style={{ fontSize: 15, fontWeight: 700 }}>{title}</div>
+        <header className="border-b border-border px-[18px] py-4">
+          <div className="text-[15px] font-semibold leading-none tracking-tight">{title}</div>
         </header>
-        <div style={{ padding: 18, fontSize: 13, color: color.textBody, lineHeight: 1.6 }}>{children}</div>
-        <footer
-          style={{
-            display: 'flex', justifyContent: 'flex-end', gap: 8,
-            padding: '12px 18px', borderTop: `1px solid ${color.border}`,
-          }}
-        >
+        <div className="p-[18px] text-[13px] leading-relaxed" style={{ color: color.textBody }}>
+          {children}
+        </div>
+        <footer className="flex justify-end gap-2 border-t border-border px-[18px] py-3">
           <Button variant="secondary" onClick={onClose}>Cancel</Button>
           {onConfirm && (
             <Button variant={confirmTone} onClick={onConfirm} disabled={confirmDisabled}>
@@ -215,34 +208,26 @@ export function Drawer({
   return (
     <div
       onClick={onClose}
-      style={{ position: 'fixed', inset: 0, background: 'rgba(17,24,39,.32)', zIndex: 450 }}
+      className="fixed inset-0 z-[450] bg-black/50"
     >
       <aside
         onClick={(e) => e.stopPropagation()}
         aria-label={title}
-        style={{
-          position: 'absolute', top: 0, right: 0, bottom: 0, width: '100%', maxWidth: width,
-          background: '#fff', boxShadow: elevation.overlay,
-          display: 'flex', flexDirection: 'column',
-        }}
+        className="absolute inset-y-0 right-0 flex w-full flex-col border-l border-border bg-background shadow-lg"
+        style={{ maxWidth: width }}
       >
-        <header
-          style={{
-            display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between',
-            gap: 12, padding: '15px 18px', borderBottom: `1px solid ${color.border}`,
-          }}
-        >
-          <div style={{ minWidth: 0 }}>
-            <div style={{ fontSize: 15, fontWeight: 700 }}>{title}</div>
-            {subtitle && <div style={{ fontSize: 12, color: color.textSecondary, marginTop: 2 }}>{subtitle}</div>}
+        <header className="flex items-start justify-between gap-3 border-b border-border px-[18px] py-4">
+          <div className="min-w-0">
+            <div className="text-[15px] font-semibold leading-none tracking-tight">{title}</div>
+            {subtitle && <div className="mt-1.5 text-xs text-muted-foreground">{subtitle}</div>}
           </div>
-          <span style={{ flexShrink: 0 }}>
+          <span className="shrink-0">
             <Button variant="icon" onClick={onClose} aria-label="Close">✕</Button>
           </span>
         </header>
-        <div style={{ flex: 1, overflow: 'auto', padding: 18 }}>{children}</div>
+        <div className="flex-1 overflow-auto p-[18px]">{children}</div>
         {footer && (
-          <footer style={{ padding: '12px 18px', borderTop: `1px solid ${color.border}` }}>{footer}</footer>
+          <footer className="border-t border-border px-[18px] py-3">{footer}</footer>
         )}
       </aside>
     </div>
@@ -352,24 +337,23 @@ export function ToggleCard({
 }) {
   return (
     <div
-      style={{
-        border: `1px solid ${color.border}`, borderRadius: radius.control,
-        background: '#fff', padding: '12px 14px',
-        display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 14,
-      }}
+      className={cn(
+        'flex items-start justify-between gap-3.5 rounded-md border border-border bg-card px-3.5 py-3',
+        'shadow-sm transition-colors',
+      )}
     >
-      <div style={{ minWidth: 0 }}>
-        <div style={{ fontSize: 13, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6 }}>
+      <div className="min-w-0">
+        <div className="flex items-center gap-1.5 text-[13px] font-semibold">
           {title}
           {isLocked && <span title={`Locked at ${lockedBy} scope`}>🔒</span>}
         </div>
         {description && (
-          <div style={{ fontSize: 11.5, color: color.textSecondary, marginTop: 3, lineHeight: 1.5 }}>
+          <div className="mt-1 text-[11.5px] leading-relaxed text-muted-foreground">
             {description}
           </div>
         )}
         {resolvedFrom && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 6 }}>
+          <div className="mt-1.5 flex items-center gap-2">
             <Chip tone={isLocked ? 'danger' : 'neutral'} icon={isLocked ? '🔒' : '●'}>
               from {resolvedFrom}
             </Chip>
@@ -377,7 +361,7 @@ export function ToggleCard({
               <button
                 type="button"
                 onClick={onViewChain}
-                style={{ border: 'none', background: 'none', color: color.brandPrimary, fontSize: 11, fontWeight: 600, cursor: 'pointer', padding: 0 }}
+                className="p-0 text-[11px] font-semibold text-primary underline-offset-4 hover:underline"
               >
                 View inheritance chain
               </button>
@@ -385,7 +369,7 @@ export function ToggleCard({
           </div>
         )}
       </div>
-      <div style={{ flexShrink: 0 }}>{children}</div>
+      <div className="shrink-0">{children}</div>
     </div>
   );
 }

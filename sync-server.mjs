@@ -11,14 +11,16 @@
  *   VITE_SYNC_URL=http://localhost:5175 npm run dev
  *   VITE_SYNC_URL=http://localhost:5175 npm run dev:portal
  *
- * It is deliberately not a database. Stop it and the demo starts fresh.
+ * It reads and writes the same file as the dev servers (RFX_SYNC_FILE to move it).
  */
 import { createServer } from 'node:http';
 import { createSyncStore } from './sync-core.mjs';
+import { syncFile } from './vite-plugin-sync.mjs';
 
 const PORT = Number(process.env.SYNC_PORT ?? 5175);
 
-const store = createSyncStore({ log: (line) => console.log(line) });
+// The same file the dev servers share, so all three agree on what is published.
+const store = createSyncStore({ log: (line) => console.log(line), file: syncFile() });
 
 const server = createServer(async (req, res) => {
   const url = new URL(req.url, `http://localhost:${PORT}`);

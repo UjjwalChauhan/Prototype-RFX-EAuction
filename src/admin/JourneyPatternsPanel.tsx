@@ -11,12 +11,16 @@
  * overriding, because a journey authored at tenant scope should still be
  * available to a category rather than be replaced by it.
  *
- * The composer offers inclusion, never re-ordering. `buildStageRail` and
- * `workspaceTabs` both walk the canonical stage order, so a journey claiming
- * AUCTION before RFQ would render in canonical order anyway — the configuration
- * would be a lie. Everything derivable is derived: the wizard, the workspace
- * tabs, the supplier task labels and the duration estimate all recompute as
- * components are picked, so what the studio shows is what the product will do.
+ * The composer separates **stages** from **activities**. Evaluation, the Q&A
+ * window and negotiation are not stages: they are work done inside one, so
+ * they are switched on at the stage that hosts them rather than standing in
+ * the sequence. What is left is genuinely sequential, and the buyer arranges
+ * it — pick the stages, then drag them into the order the client's process
+ * actually runs. Only intake and the award decision are pinned.
+ *
+ * Everything derivable is derived: the wizard, the workspace tabs, the
+ * supplier task labels and the duration estimate all recompute as components
+ * are picked, so what the studio shows is what the product will do.
  */
 import React from 'react';
 import { color, radius } from '../design-system/tokens';
@@ -30,10 +34,13 @@ import {
   ALL_PATTERNS, JOURNEY_PATTERNS, STAGE_LABELS, patternsForSide, vendorTaskLabel, workspaceTabs,
 } from '../domain/journeyPatterns';
 import {
-  JOURNEY_CUSTOM_KEY, JOURNEY_ENABLED_KEY, STAGE_COMPONENTS, availableVendorPoints,
-  componentFor, customSummary, deriveWizardSteps, estimateDuration, isJourneyEnabled,
-  masterSummaries, nextJourneyId, normaliseStages, toggleEnabled, validateJourney,
-  type CustomJourney, type JourneyDraft, type JourneySummary,
+  COMPOSABLE_STAGES, JOURNEY_CUSTOM_KEY, JOURNEY_ENABLED_KEY, STAGE_ACTIVITIES,
+  STAGE_COMPONENTS, activitiesFromStages, activitiesOf, availableVendorPoints,
+  componentFor, customSummary, deriveWizardSteps, estimateDuration, isMovable,
+  isJourneyEnabled, masterSummaries, moveStage, nextJourneyId, orderStages,
+  toggleEnabled, validateJourney,
+  type ActivityKey, type CustomJourney, type JourneyActivities, type JourneyDraft,
+  type JourneySummary,
 } from '../domain/journeyComposer';
 import { serverNow } from '../server/clock';
 import { useStore } from '../store/store';
@@ -47,7 +54,27 @@ const EMPTY_DRAFT: JourneyDraft = {
   side: 'BUY',
   stages: ['INTAKE', 'AWARD'],
   vendorInputPoints: ['INTAKE'],
+  evaluateAt: [],
+  negotiateAt: [],
+  clarifications: false,
 };
+
+/** The draft's activities, never undefined once it is in the composer. */
+function activitiesOfDraft(draft: JourneyDraft): JourneyActivities {
+  return {
+    evaluateAt: draft.evaluateAt ?? [],
+    negotiateAt: draft.negotiateAt ?? [],
+    clarifications: draft.clarifications ?? false,
+  };
+}
+
+/** Flags in the shape the workspace-tab derivation reads. */
+function tabFlags(activities: JourneyActivities) {
+  return {
+    evaluation: activities.evaluateAt.length > 0,
+    negotiation: activities.negotiateAt.length > 0,
+  };
+}
 
 export function JourneyPatternsPanel({
   scope, lineage,
@@ -113,9 +140,18 @@ export function JourneyPatternsPanel({
     if (seed) {
       setEditingId(seed.id);
       setBasedOn(seed.basedOn ?? '');
+      // A journey composed before activities existed carries them as stages.
+      // It is read in the new vocabulary on the way in, so editing one does
+      // not silently keep two models alive in the same list.
+      const activities = activitiesOf(seed.stages, {
+        evaluateAt: seed.evaluateAt,
+        negotiateAt: seed.negotiateAt,
+        clarifications: seed.clarifications,
+      });
       setDraft({
         name: seed.name, description: seed.description, side: seed.side,
-        stages: seed.stages, vendorInputPoints: seed.vendorInputPoints,
+        stages: orderStages(seed.stages), vendorInputPoints: seed.vendorInputPoints,
+        ...activities,
       });
     } else {
       setEditingId(null);
@@ -131,7 +167,7 @@ export function JourneyPatternsPanel({
 
   const save = () => {
     if (!validation.valid || scopeId === null) return;
-    const stages = normaliseStages(draft.stages);
+    const stages = orderStages(draft.stages);
     if (editingId) {
       writeCustom(authoredHere.map((j) =>
         j.id === editingId
@@ -146,6 +182,7 @@ export function JourneyPatternsPanel({
         side: draft.side,
         stages,
         vendorInputPoints: draft.vendorInputPoints,
+        ...activitiesOfDraft(draft),
         basedOn: basedOn === '' ? null : basedOn,
         scopeType: scope,
         scopeId,
@@ -188,7 +225,19 @@ export function JourneyPatternsPanel({
     },
     {
       key: 'stages', header: 'Stages',
-      render: (row) => <StageStrip stages={row.stages} />,
+      // A master is shown exactly as it ships — it declares its evaluation and
+      // negotiation as stages, and that is what its rail will render. Only a
+      // composed journey is drawn in the activity model, because only a
+      // composed journey is actually built that way.
+      render: (row) =>
+        row.origin === 'CUSTOM' ? (
+          <div className="rfx-stack" style={{ gap: 4 }}>
+            <StageStrip stages={row.stages} activities={row.activities} />
+            <ActivityLine activities={row.activities} />
+          </div>
+        ) : (
+          <StageStrip stages={row.stages} />
+        ),
     },
     {
       key: 'touchpoints', header: 'Supplier touchpoints', numeric: true, width: '150px',
@@ -358,8 +407,11 @@ export function JourneyPatternsPanel({
             setDraft((d) => ({
               ...d,
               side: pattern.side === 'SELL' ? 'SELL' : 'BUY',
-              stages: [...pattern.stages],
+              // The master declares its evaluation, clarifications and
+              // negotiation as stages; they arrive here as activities.
+              stages: orderStages(pattern.stages),
               vendorInputPoints: [...pattern.vendorInputPoints],
+              ...activitiesFromStages(pattern.stages),
             }));
           }
         }}
@@ -397,34 +449,119 @@ function scopeIdFor(scope: ConfigScopeType, lineage: ScopeLineage): Id | null {
 // The stage strip — included stages solid, omitted stages struck through
 // ---------------------------------------------------------------------------
 
-function StageStrip({ stages, showOmitted = false }: { stages: Stage[]; showOmitted?: boolean }) {
-  const included = normaliseStages(stages);
-  const shown = showOmitted ? STAGE_COMPONENTS.map((c) => c.stage) : included;
+function StageStrip({
+  stages, activities, showOmitted = false,
+}: { stages: Stage[]; activities?: JourneyActivities; showOmitted?: boolean }) {
+  // Order is the journey's own now, so the strip renders what it is given
+  // rather than sorting it. Omitted stages follow the sequence instead of
+  // sitting inside it: a stage that does not run has no position.
+  const included = stages.filter((s, i) => stages.indexOf(s) === i);
+  const omitted = showOmitted ? COMPOSABLE_STAGES.filter((s) => !included.includes(s)) : [];
 
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 3, flexWrap: 'wrap' }}>
-      {shown.map((stage, i) => {
-        const on = included.includes(stage);
-        return (
-          <React.Fragment key={stage}>
-            <span
-              style={{
-                fontSize: 10.5, fontWeight: on ? 600 : 400,
-                padding: '3px 7px', borderRadius: radius.pill, whiteSpace: 'nowrap',
-                background: on ? color.brandPrimarySoft : color.neutralSoft,
-                color: on ? color.brandPrimary : color.textMuted,
-                textDecoration: on ? 'none' : 'line-through',
-              }}
-            >
-              {STAGE_LABELS[stage]}
-            </span>
-            {i < shown.length - 1 && (
-              <span aria-hidden style={{ color: color.textMuted, fontSize: 9 }}>›</span>
-            )}
-          </React.Fragment>
-        );
-      })}
+      {included.map((stage, i) => (
+        <React.Fragment key={stage}>
+          <StagePip stage={stage} activities={activities} />
+          {i < included.length - 1 && (
+            <span aria-hidden style={{ color: color.textMuted, fontSize: 9 }}>›</span>
+          )}
+        </React.Fragment>
+      ))}
+      {omitted.length > 0 && (
+        <span style={{ color: color.textMuted, fontSize: 9, marginInline: 3 }} title="Not in this journey">
+          ·
+        </span>
+      )}
+      {omitted.map((stage) => (
+        <span
+          key={stage}
+          style={{
+            fontSize: 10.5, padding: '3px 7px', borderRadius: radius.pill, whiteSpace: 'nowrap',
+            background: color.neutralSoft, color: color.textMuted, textDecoration: 'line-through',
+          }}
+        >
+          {STAGE_LABELS[stage]}
+        </span>
+      ))}
     </div>
+  );
+}
+
+/** One stage, marked with the activities that run inside it. */
+function StagePip({ stage, activities }: { stage: Stage; activities?: JourneyActivities }) {
+  const inside: string[] = [];
+  if (activities?.evaluateAt.includes(stage)) inside.push('scored');
+  if (activities?.negotiateAt.includes(stage)) inside.push('negotiated');
+  return (
+    <span
+      title={inside.length > 0 ? `${STAGE_LABELS[stage]} — ${inside.join(' and ')} inside this stage` : undefined}
+      style={{
+        display: 'inline-flex', alignItems: 'center', gap: 4,
+        fontSize: 10.5, fontWeight: 600, padding: '3px 7px', borderRadius: radius.pill,
+        whiteSpace: 'nowrap', background: color.brandPrimarySoft, color: color.brandPrimary,
+      }}
+    >
+      {STAGE_LABELS[stage]}
+      {inside.map((mark) => (
+        <span
+          key={mark}
+          style={{
+            fontSize: 8.5, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.04em',
+            background: '#fff', borderRadius: radius.pill, padding: '1px 5px', color: color.textSecondary,
+          }}
+        >
+          {mark}
+        </span>
+      ))}
+    </span>
+  );
+}
+
+function activityLabel(key: ActivityKey): string {
+  return STAGE_ACTIVITIES.find((a) => a.key === key)!.label;
+}
+
+function activityPurpose(key: ActivityKey): string {
+  return STAGE_ACTIVITIES.find((a) => a.key === key)!.purpose;
+}
+
+/** The activities running inside one stage, as marks beside its name. */
+function ActivityMarks({ stage, activities }: { stage: Stage; activities: JourneyActivities }) {
+  const marks: string[] = [];
+  if (activities.evaluateAt.includes(stage)) marks.push('scored');
+  if (activities.negotiateAt.includes(stage)) marks.push('negotiated');
+  if (marks.length === 0) return null;
+  return (
+    <span style={{ display: 'inline-flex', gap: 4 }}>
+      {marks.map((mark) => (
+        <Chip key={mark} tone="info" title={`Runs inside ${STAGE_LABELS[stage]}`}>{mark}</Chip>
+      ))}
+    </span>
+  );
+}
+
+/** One line naming what runs inside the stages, rather than beside them. */
+function ActivityLine({ activities }: { activities: JourneyActivities }) {
+  const parts: string[] = [];
+  if (activities.evaluateAt.length > 0) {
+    parts.push(`Scored at ${activities.evaluateAt.map((s) => STAGE_LABELS[s]).join(', ')}`);
+  }
+  if (activities.negotiateAt.length > 0) {
+    parts.push(`Negotiated inside ${activities.negotiateAt.map((s) => STAGE_LABELS[s]).join(', ')}`);
+  }
+  if (activities.clarifications) parts.push('Clarifications open throughout');
+  if (parts.length === 0) {
+    return (
+      <span style={{ fontSize: 11, color: color.textMuted }}>
+        Nothing runs inside a stage — no scoring, no negotiation, no Q&A window.
+      </span>
+    );
+  }
+  return (
+    <span style={{ fontSize: 11, color: color.textSecondary, lineHeight: 1.5 }}>
+      {parts.join(' · ')}
+    </span>
   );
 }
 
@@ -449,8 +586,23 @@ function JourneyDetailDrawer({
             {summary.description}
           </div>
 
-          <DetailBlock title="Stages" hint="Omitted stages are shown struck through — the NFA records every stage that did not happen, and why.">
-            <StageStrip stages={summary.stages} showOmitted />
+          <DetailBlock title="Stages" hint="In the order this journey runs them. Omitted stages are shown struck through after the sequence — the NFA records every stage that did not happen, and why.">
+            <StageStrip
+              stages={summary.stages}
+              activities={summary.origin === 'CUSTOM' ? summary.activities : undefined}
+              showOmitted
+            />
+          </DetailBlock>
+
+          <DetailBlock
+            title="Inside the stages"
+            hint={
+              summary.origin === 'CUSTOM'
+                ? 'Scoring, negotiation and the Q&A window are work done within a stage rather than stages of their own.'
+                : 'This master pattern declares them as stages of their own. Read in the vocabulary the composer uses, this is the same process.'
+            }
+          >
+            <ActivityLine activities={summary.activities} />
           </DetailBlock>
 
           <DetailBlock
@@ -489,7 +641,10 @@ function JourneyDetailDrawer({
             hint="Derived from the stage set, not hard-coded — a tab whose stage never runs is never rendered."
           >
             <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-              {workspaceTabs(summary.stages).map((tab) => (
+              {workspaceTabs(summary.stages, {
+                evaluation: summary.activities.evaluateAt.length > 0,
+                negotiation: summary.activities.negotiateAt.length > 0,
+              }).map((tab) => (
                 <Chip key={tab} tone="info">{tab}</Chip>
               ))}
             </div>
@@ -529,7 +684,7 @@ function DetailBlock({
 // The composer
 // ---------------------------------------------------------------------------
 
-function ComposerDrawer({
+export function ComposerDrawer({
   open, editing, scope, draft, basedOn, validation, onBasedOn, onDraft, onClose, onSave,
 }: {
   open: boolean;
@@ -543,31 +698,67 @@ function ComposerDrawer({
   onClose: () => void;
   onSave: () => void;
 }) {
-  const stages = normaliseStages(draft.stages);
-  const wizardSteps = deriveWizardSteps(stages);
-  const tabs = workspaceTabs(stages);
-  const vendorPoints = availableVendorPoints(stages);
+  const activities = activitiesOfDraft(draft);
+  const stages = orderStages(draft.stages);
+  const wizardSteps = deriveWizardSteps(stages, draft.vendorInputPoints, activities);
+  const tabs = workspaceTabs(stages, tabFlags(activities));
+  const vendorPoints = availableVendorPoints(stages, activities);
+
+  /** The row being dragged, so a drop knows what it is receiving. */
+  const [dragFrom, setDragFrom] = React.useState<number | null>(null);
+
+  const patchDraft = (next: Partial<JourneyDraft>) => onDraft({ ...draft, ...next });
+
+  const prune = (next: Stage[], acts: JourneyActivities): Partial<JourneyDraft> => ({
+    stages: next,
+    // An activity whose host just left the journey goes with it, and so does a
+    // touchpoint whose stage did. Leaving either behind to fail validation
+    // makes the buyer fix something they did not do.
+    evaluateAt: acts.evaluateAt.filter((s) => next.includes(s)),
+    negotiateAt: acts.negotiateAt.filter((s) => next.includes(s)),
+    vendorInputPoints: draft.vendorInputPoints.filter(
+      (point) => next.includes(point as Stage) || (point === 'NEGOTIATION' && acts.negotiateAt.some((s) => next.includes(s))),
+    ),
+  });
 
   const toggleStage = (stage: Stage, on: boolean) => {
+    // A newly picked stage lands at the end of the middle section, where the
+    // buyer is most likely to want it, and is then dragged into place.
     const next = on
-      ? normaliseStages([...draft.stages, stage])
-      : draft.stages.filter((s) => s !== stage);
-    // A touchpoint whose stage just left the journey goes with it, rather than
-    // being left behind to fail validation.
-    onDraft({
-      ...draft,
-      stages: next,
-      vendorInputPoints: draft.vendorInputPoints.filter((p) => next.includes(p as Stage)),
+      ? orderStages([...draft.stages, stage])
+      : orderStages(draft.stages.filter((s) => s !== stage));
+    patchDraft(prune(next, activities));
+  };
+
+  const toggleActivity = (key: ActivityKey, stage: Stage | null, on: boolean) => {
+    if (key === 'CLARIFICATION') {
+      patchDraft({ clarifications: on });
+      return;
+    }
+    if (stage === null) return;
+    const field = key === 'EVALUATION' ? 'evaluateAt' : 'negotiateAt';
+    const current = activities[field];
+    const next = on
+      ? stages.filter((s) => s === stage || current.includes(s))
+      : current.filter((s) => s !== stage);
+    patchDraft({
+      [field]: next,
+      // Negotiation is a supplier touchpoint in its own right; dropping the
+      // last one takes the touchpoint with it.
+      ...(key === 'NEGOTIATION' && next.length === 0
+        ? { vendorInputPoints: draft.vendorInputPoints.filter((pt) => pt !== 'NEGOTIATION') }
+        : {}),
     });
   };
+
+  const reorder = (from: number, to: number) =>
+    patchDraft({ stages: moveStage(stages, from, to) });
 
   const togglePoint = (point: VendorInputPoint, on: boolean) => {
     onDraft({
       ...draft,
       vendorInputPoints: on
-        ? availableVendorPoints(stages).filter(
-            (p) => p === point || draft.vendorInputPoints.includes(p),
-          )
+        ? vendorPoints.filter((p) => p === point || draft.vendorInputPoints.includes(p))
         : draft.vendorInputPoints.filter((p) => p !== point),
     });
   };
@@ -648,18 +839,16 @@ function ComposerDrawer({
         </Field>
 
         <div>
-          <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 3 }}>Stage components</div>
+          <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 3 }}>1 · Pick the stages</div>
           <div style={{ fontSize: 11, color: color.textSecondary, marginBottom: 9, lineHeight: 1.55 }}>
-            A journey is a subset of the canonical stage order, never a re-ordering — the stage rail and
-            the workspace tabs both walk that order, so a re-ordered journey would render in canonical
-            order anyway. Pick what runs; the sequence follows.
+            Each one is independent of the others — pick what runs, then order them in step 2.
+            Scoring, negotiation and the Q&amp;A window are not stages: they are work done{' '}
+            <em>inside</em> one, and are switched on here against the stage that hosts them.
           </div>
           <div className="rfx-stack" style={{ gap: 7 }}>
             {STAGE_COMPONENTS.map((component) => {
               const on = stages.includes(component.stage);
-              const unmet =
-                component.requiresOneOf.length > 0 &&
-                !component.requiresOneOf.some((s) => stages.includes(s));
+              const hosted = STAGE_ACTIVITIES.filter((a) => a.hosts.includes(component.stage));
               return (
                 <div
                   key={component.stage}
@@ -683,10 +872,144 @@ function ComposerDrawer({
                     </div>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 4, flexShrink: 0, alignItems: 'flex-end' }}>
                       {component.mandatory && <Chip tone="neutral" title="Every journey carries this">required</Chip>}
+                      {component.anchor === 'OPENS' && <Chip tone="neutral" title="Demand arrives here, so it opens the journey">opens</Chip>}
+                      {component.anchor === 'CLOSES' && <Chip tone="neutral" title="Sequenced last — an award cannot precede the work it decides">closes</Chip>}
                       {component.vendorFacing && <Chip tone="info">supplier-facing</Chip>}
-                      {on && unmet && <Chip tone="danger">needs a solicitation</Chip>}
                     </div>
                   </div>
+
+                  {/* The activities this stage can host. Shown only once the
+                      stage is in, because an activity with no host is not a
+                      choice the buyer can meaningfully make. */}
+                  {on && hosted.length > 0 && (
+                    <div
+                      style={{
+                        marginTop: 9, paddingTop: 8, borderTop: `1px dashed ${color.border}`,
+                        display: 'grid', gap: 7,
+                      }}
+                    >
+                      <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: '.05em', textTransform: 'uppercase', color: color.textMuted }}>
+                        Runs inside {component.label}
+                      </div>
+                      {hosted.map((activity) => {
+                        const field = activity.key === 'EVALUATION' ? 'evaluateAt' : 'negotiateAt';
+                        return (
+                          <div key={activity.key}>
+                            <Checkbox
+                              checked={activities[field].includes(component.stage)}
+                              label={activity.label}
+                              onChange={(next) => toggleActivity(activity.key, component.stage, next)}
+                            />
+                            <div style={{ fontSize: 10.5, color: color.textSecondary, marginTop: 3, marginLeft: 22, lineHeight: 1.5 }}>
+                              {activity.purpose}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Clarifications belong to no single stage, so they are not offered
+              against one. The buyer opens the window for the journey. */}
+          <div
+            style={{
+              marginTop: 9, border: `1px solid ${activities.clarifications ? color.brandPrimary : color.border}`,
+              background: activities.clarifications ? color.brandPrimarySoft : '#fff',
+              borderRadius: radius.control, padding: '9px 12px',
+            }}
+          >
+            <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: '.05em', textTransform: 'uppercase', color: color.textMuted, marginBottom: 6 }}>
+              Runs across the whole journey
+            </div>
+            <Checkbox
+              checked={activities.clarifications}
+              label={activityLabel('CLARIFICATION')}
+              onChange={(next) => toggleActivity('CLARIFICATION', null, next)}
+            />
+            <div style={{ fontSize: 11, color: color.textSecondary, marginTop: 4, marginLeft: 22, lineHeight: 1.55 }}>
+              {activityPurpose('CLARIFICATION')} Substantive answers are broadcast to every bidder —
+              that fairness rule is not configurable.
+            </div>
+          </div>
+        </div>
+
+        <div>
+          <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 3 }}>2 · Put them in order</div>
+          <div style={{ fontSize: 11, color: color.textSecondary, marginBottom: 9, lineHeight: 1.55 }}>
+            Drag to re-sequence, or use the arrows. Intake opens the journey because that is where
+            demand arrives, and the award decision closes it — everything between is yours to arrange,
+            including running the auction before a solicitation.
+          </div>
+          <div className="rfx-stack" style={{ gap: 5 }}>
+            {stages.map((stage, index) => {
+              const movable = isMovable(stage);
+              const canUp = movable && index > 0 && isMovable(stages[index - 1]);
+              const canDown = movable && index < stages.length - 1 && isMovable(stages[index + 1]);
+              const dragging = dragFrom === index;
+              return (
+                <div
+                  key={stage}
+                  draggable={movable}
+                  onDragStart={(e) => {
+                    setDragFrom(index);
+                    e.dataTransfer.effectAllowed = 'move';
+                    // Firefox will not start a drag without payload.
+                    e.dataTransfer.setData('text/plain', stage);
+                  }}
+                  onDragEnd={() => setDragFrom(null)}
+                  onDragOver={(e) => {
+                    if (dragFrom !== null && dragFrom !== index) e.preventDefault();
+                  }}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    if (dragFrom !== null) reorder(dragFrom, index);
+                    setDragFrom(null);
+                  }}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 9,
+                    border: `1px solid ${dragging ? color.brandPrimary : color.border}`,
+                    background: dragging ? color.brandPrimarySoft : '#fff',
+                    borderRadius: radius.control, padding: '7px 10px',
+                    opacity: dragging ? 0.6 : 1,
+                    cursor: movable ? 'grab' : 'default',
+                  }}
+                >
+                  <span
+                    aria-hidden
+                    title={movable ? 'Drag to re-sequence' : 'Fixed position'}
+                    style={{ fontSize: 12, color: movable ? color.textMuted : color.borderStrong, width: 10 }}
+                  >
+                    {movable ? '⠿' : '•'}
+                  </span>
+                  <span style={{ fontSize: 11, color: color.textMuted, fontVariantNumeric: 'tabular-nums', width: 14 }}>
+                    {index + 1}
+                  </span>
+                  <strong style={{ fontSize: 12.5 }}>{STAGE_LABELS[stage]}</strong>
+                  <ActivityMarks stage={stage} activities={activities} />
+                  <span style={{ flex: 1 }} />
+                  {!movable && (
+                    <Chip tone="neutral" title="Intake opens and the award closes — those two are structural">
+                      fixed
+                    </Chip>
+                  )}
+                  <Button
+                    variant="icon" size="small" disabled={!canUp}
+                    aria-label={`Move ${STAGE_LABELS[stage]} earlier`}
+                    onClick={() => reorder(index, index - 1)}
+                  >
+                    ↑
+                  </Button>
+                  <Button
+                    variant="icon" size="small" disabled={!canDown}
+                    aria-label={`Move ${STAGE_LABELS[stage]} later`}
+                    onClick={() => reorder(index, index + 1)}
+                  >
+                    ↓
+                  </Button>
                 </div>
               );
             })}
@@ -729,8 +1052,12 @@ function ComposerDrawer({
 
         <Card title="What this produces" hint="Recomputed as you pick components — nothing here is hand-entered.">
           <div className="rfx-stack" style={{ gap: 12 }}>
-            <DetailBlock title="Stage sequence">
-              <StageStrip stages={stages} showOmitted />
+            <DetailBlock title="Stage sequence" hint="The order you arranged, which is the order the rail and the workspace will walk.">
+              <StageStrip stages={stages} activities={activities} showOmitted />
+            </DetailBlock>
+
+            <DetailBlock title="Inside the stages">
+              <ActivityLine activities={activities} />
             </DetailBlock>
 
             <DetailBlock
@@ -751,7 +1078,7 @@ function ComposerDrawer({
             </DetailBlock>
 
             <DetailBlock title="Estimated duration">
-              <span style={{ fontSize: 12.5 }}>{estimateDuration(stages)}</span>
+              <span style={{ fontSize: 12.5 }}>{estimateDuration(stages, activities)}</span>
             </DetailBlock>
           </div>
         </Card>

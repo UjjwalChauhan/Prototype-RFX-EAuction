@@ -4,17 +4,45 @@
  */
 import { describe, expect, it } from 'vitest';
 import {
-  MANDATORY_STAGES, STAGE_COMPONENTS, availableVendorPoints, deriveWizardSteps,
-  estimateDuration, isJourneyEnabled, nextJourneyId, normaliseStages, toggleEnabled,
-  validateJourney,
+  ACTIVITY_STAGES, COMPOSABLE_STAGES, MANDATORY_STAGES, MOVABLE_STAGES, STAGE_ACTIVITIES,
+  STAGE_COMPONENTS, activitiesFromStages, availableVendorPoints, deriveWizardSteps,
+  equivalentStages, estimateDuration, invitesVendors, isJourneyEnabled, moveStage, nextJourneyId,
+  normaliseStages, orderStages, toggleEnabled, validateJourney,
 } from '../journeyComposer';
 import { ALL_PATTERNS, JOURNEY_PATTERNS, STAGE_ORDER, workspaceTabs } from '../journeyPatterns';
 import { resolve, resolveAccumulated } from '../config';
 import type { ConfigSetting, JourneyPatternId, Stage } from '../types';
 
 describe('stage components', () => {
-  it('offers exactly the canonical stages, in canonical order', () => {
-    expect(STAGE_COMPONENTS.map((c) => c.stage)).toEqual(STAGE_ORDER);
+  it('offers every canonical stage either as a component or as an activity', () => {
+    const covered = [
+      ...STAGE_COMPONENTS.map((c) => c.stage),
+      ...ACTIVITY_STAGES,
+    ];
+    expect([...covered].sort()).toEqual([...STAGE_ORDER].sort());
+  });
+
+  it('does not offer the three activities as stages to sequence', () => {
+    for (const stage of ACTIVITY_STAGES) {
+      expect(COMPOSABLE_STAGES, stage).not.toContain(stage);
+    }
+    expect(STAGE_ACTIVITIES.map((a) => a.key).sort()).toEqual([...ACTIVITY_STAGES].sort());
+  });
+
+  it('hosts each activity where the work it describes actually happens', () => {
+    const hosts = (key: string) => STAGE_ACTIVITIES.find((a) => a.key === key)!.hosts;
+    // Scoring applies to responses, which only a solicitation produces.
+    expect(hosts('EVALUATION')).toEqual(['RFI', 'RFP', 'RFQ']);
+    // A counter-offer needs a submitted price to counter.
+    expect(hosts('NEGOTIATION')).toEqual(['RFQ', 'AUCTION']);
+    // A buyer clarifies whenever asked, so it belongs to no single stage.
+    expect(hosts('CLARIFICATION')).toEqual([]);
+  });
+
+  it('pins only the two anchors, and leaves the rest movable', () => {
+    expect(MOVABLE_STAGES).toEqual(['RFI', 'RFP', 'RFQ', 'AUCTION']);
+    expect(COMPOSABLE_STAGES[0]).toBe('INTAKE');
+    expect(COMPOSABLE_STAGES.slice(-2)).toEqual(['AWARD', 'APPROVAL']);
   });
 
   it('marks intake and award mandatory, and every master pattern honours that', () => {
@@ -26,13 +54,90 @@ describe('stage components', () => {
     }
   });
 
-  it('normalises an out-of-order selection back into the canonical order', () => {
-    const scrambled: Stage[] = ['AWARD', 'AUCTION', 'INTAKE', 'RFQ'];
-    expect(normaliseStages(scrambled)).toEqual(['INTAKE', 'RFQ', 'AUCTION', 'AWARD']);
+  it('keeps the order the buyer arranged rather than sorting it back', () => {
+    // This is the whole point of the change: an auction before the RFQ is a
+    // real process, and used to be silently re-sorted into canonical order.
+    const asArranged: Stage[] = ['INTAKE', 'AUCTION', 'RFQ', 'AWARD'];
+    expect(orderStages(asArranged)).toEqual(['INTAKE', 'AUCTION', 'RFQ', 'AWARD']);
+  });
+
+  it('pins intake first and the award decision last, wherever they were put', () => {
+    expect(orderStages(['AWARD', 'APPROVAL', 'RFQ', 'INTAKE']))
+      .toEqual(['INTAKE', 'RFQ', 'AWARD', 'APPROVAL']);
+    // Approval follows the award: approving a decision not yet made is not a
+    // thing, however it was dragged.
+    expect(orderStages(['INTAKE', 'APPROVAL', 'AWARD'])).toEqual(['INTAKE', 'AWARD', 'APPROVAL']);
   });
 
   it('drops duplicates rather than rendering a stage twice', () => {
-    expect(normaliseStages(['INTAKE', 'INTAKE', 'AWARD'])).toEqual(['INTAKE', 'AWARD']);
+    expect(orderStages(['INTAKE', 'INTAKE', 'AWARD'])).toEqual(['INTAKE', 'AWARD']);
+  });
+
+  it('drops the activity stages from a sequence — they are not positions', () => {
+    expect(orderStages(['INTAKE', 'RFQ', 'EVALUATION', 'NEGOTIATION', 'AWARD']))
+      .toEqual(['INTAKE', 'RFQ', 'AWARD']);
+  });
+
+  it('still sorts canonically where canonical order is what is wanted', () => {
+    expect(normaliseStages(['AWARD', 'AUCTION', 'INTAKE', 'RFQ']))
+      .toEqual(['INTAKE', 'RFQ', 'AUCTION', 'AWARD']);
+  });
+});
+
+describe('re-sequencing', () => {
+  const FULL: Stage[] = ['INTAKE', 'RFI', 'RFP', 'RFQ', 'AUCTION', 'AWARD', 'APPROVAL'];
+
+  it('moves a stage to the index it was dropped on', () => {
+    expect(moveStage(FULL, 4, 1)).toEqual(['INTAKE', 'AUCTION', 'RFI', 'RFP', 'RFQ', 'AWARD', 'APPROVAL']);
+  });
+
+  it('moves a stage later as well as earlier', () => {
+    expect(moveStage(FULL, 1, 4)).toEqual(['INTAKE', 'RFP', 'RFQ', 'AUCTION', 'RFI', 'AWARD', 'APPROVAL']);
+  });
+
+  it('corrects a drop that would unseat an anchor rather than refusing it', () => {
+    // Dropping the award into the middle re-asserts the anchor instead of
+    // leaving the buyer with a journey that awards before it asks.
+    expect(moveStage(FULL, 5, 1)).toEqual(FULL);
+    expect(moveStage(FULL, 0, 3)).toEqual(FULL);
+  });
+
+  it('is a no-op on an index that does not exist', () => {
+    expect(moveStage(FULL, 2, 2)).toEqual(FULL);
+    expect(moveStage(FULL, -1, 2)).toEqual(FULL);
+    expect(moveStage(FULL, 2, 99)).toEqual(FULL);
+  });
+});
+
+describe('reading a legacy stage set as activities', () => {
+  it('reads an evaluation stage as scoring the solicitations that ran', () => {
+    const activities = activitiesFromStages(['INTAKE', 'RFI', 'RFP', 'EVALUATION', 'AWARD']);
+    expect(activities.evaluateAt).toEqual(['RFI', 'RFP']);
+  });
+
+  it('lands a legacy negotiation on the price event it ran against', () => {
+    expect(activitiesFromStages(['INTAKE', 'RFQ', 'NEGOTIATION', 'AUCTION', 'AWARD']).negotiateAt)
+      .toEqual(['RFQ']);
+    expect(activitiesFromStages(['INTAKE', 'AUCTION', 'NEGOTIATION', 'AWARD']).negotiateAt)
+      .toEqual(['AUCTION']);
+  });
+
+  it('reads a clarification stage as a window open across the journey', () => {
+    expect(activitiesFromStages(['INTAKE', 'RFP', 'CLARIFICATION', 'AWARD']).clarifications).toBe(true);
+    expect(activitiesFromStages(['INTAKE', 'RFP', 'AWARD']).clarifications).toBe(false);
+  });
+
+  it('folds activities back into the stage set the engine still speaks', () => {
+    expect(equivalentStages(['INTAKE', 'RFQ', 'AWARD'], { evaluateAt: ['RFQ'] }))
+      .toEqual(['INTAKE', 'RFQ', 'EVALUATION', 'AWARD']);
+  });
+
+  it('round-trips every master pattern through the activity model', () => {
+    for (const pattern of ALL_PATTERNS) {
+      const stages = orderStages(pattern.stages);
+      expect(equivalentStages(stages, activitiesFromStages(pattern.stages)), pattern.id)
+        .toEqual(pattern.stages);
+    }
   });
 
   it('offers only vendor-facing stages as supplier touchpoints', () => {
@@ -64,7 +169,7 @@ describe('derived wizard steps', () => {
 
   it('always opens on basics and items and ends on review', () => {
     const steps = deriveWizardSteps(['INTAKE', 'AWARD'], []);
-    expect(steps).toEqual(['Basics', 'Items & Lots', 'Review']);
+    expect(steps).toEqual(['Basics', 'Items & Vendors', 'Review']);
   });
 
   it('adds a terms step wherever the journey asks the supplier for something', () => {
@@ -83,16 +188,21 @@ describe('derived wizard steps', () => {
     expect(steps).not.toContain('Evaluation');
   });
 
-  it('adds a bidders step only where the journey is competitive', () => {
-    expect(deriveWizardSteps(['INTAKE', 'AWARD', 'APPROVAL'])).not.toContain('Bidders');
-    expect(deriveWizardSteps(['INTAKE', 'AUCTION', 'AWARD'])).toContain('Bidders');
+  it('carries the vendor roster on the items step rather than a step of its own', () => {
+    // The basket and the people asked to price it are one decision, so there
+    // is no separate bidders step to add or leave out. Whether the roster is
+    // shown on that step is the composer's other answer, `invitesVendors`.
+    expect(deriveWizardSteps(['INTAKE', 'AUCTION', 'AWARD'])).not.toContain('Bidders');
+    expect(invitesVendors(['INTAKE', 'AWARD', 'APPROVAL'])).toBe(false);
+    expect(invitesVendors(['INTAKE', 'AUCTION', 'AWARD'])).toBe(true);
+    expect(invitesVendors(['INTAKE', 'RFQ', 'AWARD'])).toBe(true);
   });
 
-  it('reshapes from three steps to nine as stages are added', () => {
+  it('reshapes from three steps to eight as stages are added', () => {
     expect(deriveWizardSteps(['INTAKE', 'AWARD'], [])).toHaveLength(3);
     expect(deriveWizardSteps(
       ['INTAKE', 'RFQ', 'EVALUATION', 'NEGOTIATION', 'AUCTION', 'AWARD', 'APPROVAL'],
-    )).toHaveLength(9);
+    )).toHaveLength(8);
   });
 });
 
@@ -147,18 +257,71 @@ describe('validateJourney', () => {
     expect(result.errors.filter((e) => e.code === 'MISSING_MANDATORY')).toHaveLength(2);
   });
 
-  it('refuses evaluation with nothing to evaluate', () => {
+  it('refuses scoring at a stage the journey does not run', () => {
     const result = validateJourney(
-      { ...base, stages: ['INTAKE', 'EVALUATION', 'AWARD'], vendorInputPoints: [] }, [],
+      { ...base, stages: ['INTAKE', 'AWARD'], evaluateAt: ['RFQ'], vendorInputPoints: [] }, [],
     );
-    expect(result.errors.map((e) => e.code)).toContain('REQUIRES_ONE_OF');
+    expect(result.errors.map((e) => e.code)).toContain('ACTIVITY_HOST_MISSING');
   });
 
-  it('refuses negotiation with no responses to negotiate against', () => {
+  it('refuses negotiation at a stage the journey does not run', () => {
     const result = validateJourney(
-      { ...base, stages: ['INTAKE', 'NEGOTIATION', 'AWARD'], vendorInputPoints: ['NEGOTIATION'] }, [],
+      { ...base, stages: ['INTAKE', 'AWARD'], negotiateAt: ['AUCTION'], vendorInputPoints: [] }, [],
     );
-    expect(result.errors.map((e) => e.code)).toContain('REQUIRES_ONE_OF');
+    expect(result.errors.map((e) => e.code)).toContain('ACTIVITY_HOST_MISSING');
+  });
+
+  it('refuses a negotiation hosted by a stage with no submitted price', () => {
+    const result = validateJourney(
+      { ...base, stages: ['INTAKE', 'RFI', 'AWARD'], negotiateAt: ['RFI'], vendorInputPoints: ['RFI'] }, [],
+    );
+    expect(result.errors.map((e) => e.code)).toContain('ACTIVITY_HOST_INVALID');
+  });
+
+  it('warns when responses arrive and nothing scores them', () => {
+    const result = validateJourney(
+      { ...base, stages: ['INTAKE', 'RFQ', 'AWARD'], evaluateAt: [], vendorInputPoints: ['RFQ'] }, [],
+    );
+    expect(result.valid).toBe(true);
+    expect(result.warnings.map((w) => w.code)).toContain('NOTHING_SCORED');
+  });
+
+  it('warns when the auction is sequenced before the field is qualified', () => {
+    const result = validateJourney(
+      {
+        ...base, name: 'Floor-first auction',
+        stages: ['INTAKE', 'AUCTION', 'RFQ', 'AWARD'],
+        evaluateAt: ['RFQ'], vendorInputPoints: ['AUCTION', 'RFQ'],
+      },
+      [],
+    );
+    expect(result.valid).toBe(true);
+    expect(result.warnings.map((w) => w.code)).toContain('AUCTION_BEFORE_SOLICITATION');
+  });
+
+  it('does not warn about order when the auction follows the solicitation', () => {
+    const result = validateJourney(
+      {
+        ...base, name: 'Quote then auction',
+        stages: ['INTAKE', 'RFQ', 'AUCTION', 'AWARD'],
+        evaluateAt: ['RFQ'], vendorInputPoints: ['RFQ', 'AUCTION'],
+      },
+      [],
+    );
+    expect(result.warnings.map((w) => w.code)).not.toContain('AUCTION_BEFORE_SOLICITATION');
+  });
+
+  it('keeps negotiation available as a supplier touchpoint when it is an activity', () => {
+    const result = validateJourney(
+      {
+        ...base, name: 'Negotiated quote', stages: ['INTAKE', 'RFQ', 'AWARD'],
+        evaluateAt: ['RFQ'], negotiateAt: ['RFQ'], vendorInputPoints: ['RFQ', 'NEGOTIATION'],
+      },
+      [],
+    );
+    expect(result.errors).toHaveLength(0);
+    expect(availableVendorPoints(['INTAKE', 'RFQ', 'AWARD'], { negotiateAt: ['RFQ'] }))
+      .toContain('NEGOTIATION');
   });
 
   it('refuses a touchpoint whose stage is not in the journey', () => {

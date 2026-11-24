@@ -11,6 +11,7 @@ import { StoreProvider, useStore } from './store/store';
 import { useSync, type SyncStatus } from './store/sync';
 import { AdminShell, type Route } from './admin/AdminShell';
 import { SourcingBoard } from './admin/SourcingBoard';
+import { RfxHome } from './admin/RfxHome';
 import { CreateEventWizard } from './admin/CreateEventWizard';
 import { useEventWorkspace } from './admin/EventWorkspace';
 import { ConfigurationStudio, DoaAndAgents } from './admin/ConfigurationStudio';
@@ -18,12 +19,13 @@ import { ApprovalInbox, IntakeWorkbench, StageList } from './admin/IntakeAndList
 import { AuctionBoard } from './admin/AuctionBoard';
 import { PurchaseRequests } from './admin/PurchaseRequests';
 import { PortalShell } from './portal/PortalShell';
+import { EmployeePortal } from './employee/EmployeePortal';
 import { Card, Empty } from './design-system/components/layout';
 import { Button } from './design-system/components/primitives';
 
 export function App() {
   return (
-    <StoreProvider>
+    <StoreProvider persist>
       <Surfaces />
     </StoreProvider>
   );
@@ -37,7 +39,7 @@ function Surfaces() {
   return (
     <>
       <SyncBanner status={sync} />
-      {state.surface === 'PORTAL' ? <PortalShell /> : <AdminApp />}
+      {state.surface === 'PORTAL' ? <PortalShell /> : state.surface === 'EMPLOYEE' ? <EmployeePortal /> : <AdminApp />}
     </>
   );
 }
@@ -62,7 +64,7 @@ function SyncBanner({ status }: { status: SyncStatus }) {
       }}
     >
       {offline
-        ? 'The supplier portal is not connected — anything you publish stays on this machine until it is. The portal reads the seam this dev server holds at /__sync.'
+        ? 'This page has lost its dev server, so what you publish is not reaching the supplier portal. Start it again with npm run dev (or npm run dev:all for both portals) and reload — published events, RFIs and invitations are kept and go across as soon as it is back.'
         : 'Connecting the supplier portal…'}
     </div>
   );
@@ -111,11 +113,16 @@ function AdminApp() {
     );
   }
 
-  const chrome: Record<string, { title: string; subtitle?: string; body: React.ReactNode }> = {
+  const chrome: Record<string, { title: string; subtitle?: string; breadcrumb?: string; body: React.ReactNode }> = {
     board: {
       title: 'Sourcing',
       subtitle: 'Every event, at every stage, in one place.',
       body: <SourcingBoard onNavigate={setRoute} />,
+    },
+    rfxHome: {
+      title: 'RFX Home',
+      subtitle: 'Your day across every ask — what needs you, where everything is, and what it is worth.',
+      body: <RfxHome onNavigate={setRoute} />,
     },
     requests: {
       title: 'Purchase Request',
@@ -128,10 +135,11 @@ function AdminApp() {
       body: <IntakeWorkbench onNavigate={setRoute} />,
     },
     create: {
-      title: 'Create Event',
+      title: 'Create sourcing event',
+      breadcrumb: 'Procurement › RFX › New event',
       subtitle: route.name === 'create' && route.prdId
         ? 'Raised against a consolidated demand — basics and lines are populated from the requisitions.'
-        : 'The stepper reshapes to the journey pattern without losing what you have entered.',
+        : undefined,
       body: (
         <CreateEventWizard
           onNavigate={setRoute}
@@ -188,6 +196,7 @@ function AdminApp() {
       onNavigate={setRoute}
       title={current.title}
       subtitle={current.subtitle}
+      breadcrumb={current.breadcrumb}
     >
       {current.body}
     </AdminShell>

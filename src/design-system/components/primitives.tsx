@@ -1,8 +1,28 @@
 /**
- * Pack 00 §2 — primitives. C-PILL, C-CHIP, buttons, inputs, selection controls.
+ * Pack 00 §2 — primitives, on shadcn/ui's component anatomy.
+ *
+ * Each component below is the shadcn component of the same name, kept at this
+ * product's density: `cva` variants, Tailwind utilities against the token
+ * layer in `global.css`, a focus ring rather than a browser outline, and
+ * `disabled:opacity-50 disabled:pointer-events-none` rather than a hand-rolled
+ * dimming. What did **not** change is the prop surface — `variant="primary"`,
+ * `size="small"`, `tone="gold"` and the rest still mean what they meant, so
+ * fifty screens keep working and every interaction is the one that was there
+ * before.
+ *
+ * Two deliberate departures from stock shadcn:
+ *
+ * - **Denser.** shadcn's default control is 36px with 14px type, which is
+ *   right for a marketing app and wrong for a comparison grid with eleven
+ *   columns. Controls here are 32px/12px, which is shadcn's own `sm`.
+ * - **No Radix.** These are presentational components with no overlay
+ *   behaviour to delegate; the ones that do have it — Drawer, Modal — live in
+ *   `domain.tsx` and keep their own focus handling.
  */
 import React from 'react';
-import { BASE_CURRENCY, color, currencySymbol, font, money, radius, type } from '../tokens';
+import { cva, type VariantProps } from 'class-variance-authority';
+import { BASE_CURRENCY, color, currencySymbol, font, money, type } from '../tokens';
+import { cn } from '../cn';
 import type { StatusPresentation } from '../../domain/statusMachine';
 
 // ---------------------------------------------------------------------------
@@ -12,54 +32,58 @@ import type { StatusPresentation } from '../../domain/statusMachine';
 export type ButtonVariant = 'primary' | 'secondary' | 'tertiary' | 'destructive' | 'icon';
 export type ButtonSize = 'small' | 'medium';
 
-export interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
+/**
+ * shadcn's button variants, under this product's names. `primary` is shadcn's
+ * `default`, `secondary` is its `outline`, `tertiary` is its `ghost` in the
+ * brand colour, and `icon` is `outline` at square proportions.
+ */
+const buttonVariants = cva(
+  'inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md font-medium '
+  + 'transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring '
+  + 'focus-visible:ring-offset-1 disabled:pointer-events-none disabled:opacity-50',
+  {
+    variants: {
+      intent: {
+        primary: 'bg-primary text-primary-foreground shadow-sm hover:bg-primary/90',
+        secondary: 'border border-input bg-background text-foreground shadow-sm hover:bg-accent hover:text-accent-foreground',
+        tertiary: 'text-primary hover:bg-accent hover:text-accent-foreground',
+        destructive: 'bg-destructive text-white shadow-sm hover:bg-destructive/90',
+        icon: 'border border-input bg-background text-foreground shadow-sm hover:bg-accent hover:text-accent-foreground',
+      },
+      scale: {
+        small: 'h-7 px-2.5 text-[11px]',
+        medium: 'h-8 px-3 text-xs',
+      },
+    },
+    compoundVariants: [
+      { intent: 'icon', scale: 'small', class: 'h-7 w-7 p-0' },
+      { intent: 'icon', scale: 'medium', class: 'h-8 w-8 p-0' },
+    ],
+    defaultVariants: { intent: 'secondary', scale: 'medium' },
+  },
+);
+
+export interface ButtonProps
+  extends React.ButtonHTMLAttributes<HTMLButtonElement>,
+  Omit<VariantProps<typeof buttonVariants>, 'intent' | 'scale'> {
   variant?: ButtonVariant;
   size?: ButtonSize;
   loading?: boolean;
 }
 
-const BUTTON_VARIANTS: Record<ButtonVariant, React.CSSProperties> = {
-  primary: { background: color.brandPrimary, color: '#fff', border: '1px solid transparent' },
-  secondary: { background: '#fff', color: color.textBody, border: `1px solid ${color.border}` },
-  tertiary: { background: 'transparent', color: color.brandPrimary, border: '1px solid transparent' },
-  destructive: { background: color.danger, color: '#fff', border: '1px solid transparent' },
-  icon: { background: '#fff', color: color.textBody, border: `1px solid ${color.border}`, padding: '6px 9px' },
-};
-
 export function Button({
-  variant = 'secondary', size = 'medium', loading, children, style, disabled, ...rest
+  variant = 'secondary', size = 'medium', loading, children, className, disabled, ...rest
 }: ButtonProps) {
-  // Reference density: a 28px control with 11.5px type, 22px for the small one.
-  const pad = size === 'small' ? '4px 9px' : '6px 12px';
-  const fontSize = size === 'small' ? 10.5 : 11.5;
   return (
     <button
       {...rest}
       disabled={disabled || loading}
-      style={{
-        ...BUTTON_VARIANTS[variant],
-        borderRadius: radius.control,
-        padding: variant === 'icon' ? '6px 9px' : pad,
-        fontSize,
-        fontWeight: 500,
-        cursor: disabled || loading ? 'not-allowed' : 'pointer',
-        opacity: disabled || loading ? 0.55 : 1,
-        display: 'inline-flex',
-        alignItems: 'center',
-        gap: 6,
-        whiteSpace: 'nowrap',
-        ...style,
-      }}
+      className={cn(buttonVariants({ intent: variant, scale: size }), className)}
     >
       {loading && (
         <span
           aria-hidden
-          style={{
-            width: 11, height: 11, borderRadius: '50%',
-            border: '2px solid rgba(255,255,255,.4)',
-            borderTopColor: '#fff',
-            animation: 'rfx-spin .7s linear infinite',
-          }}
+          className="size-3 animate-spin rounded-full border-2 border-current/30 border-t-current"
         />
       )}
       {children}
@@ -69,6 +93,9 @@ export function Button({
 
 // ---------------------------------------------------------------------------
 // C-PILL — status. Always colour + icon + text.
+//
+// shadcn's Badge, carrying the status palette the domain layer hands it:
+// a status colour is a product decision, not a component one.
 // ---------------------------------------------------------------------------
 
 export interface PillProps {
@@ -79,19 +106,15 @@ export interface PillProps {
 }
 
 export function Pill({ presentation, size = 'medium', live }: PillProps) {
-  const small = size === 'small';
   return (
     <span
-      style={{
-        display: 'inline-flex', alignItems: 'center', gap: 5,
-        background: presentation.bg, color: presentation.fg,
-        borderRadius: radius.pill,
-        padding: small ? '2px 8px' : '3px 10px',
-        fontSize: small ? 11 : 11.5, fontWeight: 600,
-        whiteSpace: 'nowrap',
-      }}
+      className={cn(
+        'inline-flex items-center gap-1.5 rounded-full font-semibold whitespace-nowrap',
+        size === 'small' ? 'px-2 py-0.5 text-[11px]' : 'px-2.5 py-0.5 text-[11.5px]',
+      )}
+      style={{ background: presentation.bg, color: presentation.fg }}
     >
-      <span aria-hidden style={live ? { animation: 'rfx-pulse 1.2s infinite' } : undefined}>
+      <span aria-hidden className={live ? 'animate-pulse' : undefined}>
         {presentation.icon}
       </span>
       {presentation.label}
@@ -100,27 +123,28 @@ export function Pill({ presentation, size = 'medium', live }: PillProps) {
 }
 
 // ---------------------------------------------------------------------------
-// C-CHIP — a neutral label. Not a status.
+// C-CHIP — shadcn's Badge. A neutral label, not a status.
 // ---------------------------------------------------------------------------
 
 export interface ChipProps {
   children: React.ReactNode;
-  tone?: 'neutral' | 'brand' | 'purple' | 'info' | 'danger' | 'gold';
+  tone?: 'neutral' | 'brand' | 'purple' | 'info' | 'success' | 'danger' | 'gold';
   icon?: string;
   title?: string;
 }
 
 /**
- * The reference's chips: a soft fill with a border one step darker, which is
- * what keeps them legible against both the white surface and the zebra row.
+ * A soft fill with a border one step darker, which is what keeps a badge
+ * legible against both the white surface and the zebra row.
  */
 const CHIP_TONES: Record<NonNullable<ChipProps['tone']>, { fg: string; bg: string; bd: string }> = {
   neutral: { fg: color.textSecondary, bg: color.rowAlt, bd: color.border },
   brand: { fg: color.brandPrimaryStrong, bg: color.brandPrimarySoft, bd: color.brandPrimaryTint },
-  purple: { fg: color.accentPurpleText, bg: color.accentPurpleSoft, bd: '#DDD3EC' },
-  info: { fg: color.infoText, bg: color.infoSoft, bd: '#CFDDFB' },
-  danger: { fg: color.danger, bg: color.dangerSoft, bd: '#F6CFD0' },
-  gold: { fg: color.warningText, bg: color.warningSoft, bd: '#F1DDA6' },
+  purple: { fg: color.accentPurpleText, bg: color.accentPurpleSoft, bd: '#DDD6FE' },
+  info: { fg: color.infoText, bg: color.infoSoft, bd: '#BFDBFE' },
+  danger: { fg: color.dangerText, bg: color.dangerSoft, bd: '#FECACA' },
+  success: { fg: color.successText, bg: color.successSoft, bd: '#BBF7D0' },
+  gold: { fg: color.warningText, bg: color.warningSoft, bd: '#FDE68A' },
 };
 
 export function Chip({ children, tone = 'neutral', icon, title }: ChipProps) {
@@ -128,12 +152,8 @@ export function Chip({ children, tone = 'neutral', icon, title }: ChipProps) {
   return (
     <span
       title={title}
-      style={{
-        display: 'inline-flex', alignItems: 'center', gap: 5,
-        background: t.bg, color: t.fg, border: `1px solid ${t.bd}`,
-        borderRadius: radius.pill, padding: '2px 8px',
-        fontSize: 10.5, fontWeight: 500, whiteSpace: 'nowrap',
-      }}
+      className="inline-flex items-center gap-1.5 rounded-md border px-2 py-0.5 text-[10.5px] font-medium whitespace-nowrap"
+      style={{ background: t.bg, color: t.fg, borderColor: t.bd }}
     >
       {icon && <span aria-hidden>{icon}</span>}
       {children}
@@ -142,18 +162,19 @@ export function Chip({ children, tone = 'neutral', icon, title }: ChipProps) {
 }
 
 // ---------------------------------------------------------------------------
-// Inputs
+// Inputs — shadcn's Input, Textarea and Select, at 32px rather than 36px.
 // ---------------------------------------------------------------------------
 
-const CONTROL_BASE: React.CSSProperties = {
-  width: '100%',
-  border: `1px solid ${color.border}`,
-  borderRadius: radius.control,
-  padding: '7px 10px',
-  fontSize: 13,
-  background: '#fff',
-  color: color.textPrimary,
-};
+/** The shared control surface. Every field in the product is one of these. */
+const CONTROL = 'flex w-full rounded-md border border-input bg-background px-2.5 py-1 '
+  + 'text-[13px] text-foreground shadow-sm transition-colors placeholder:text-muted-foreground '
+  + 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 '
+  + 'disabled:cursor-not-allowed disabled:bg-muted disabled:text-muted-foreground disabled:opacity-70';
+
+const CONTROL_H = 'h-8';
+
+/** Numbers line up or they cannot be compared down a column. */
+const TABULAR = 'font-mono [font-variant-numeric:tabular-nums]';
 
 export interface FieldProps {
   label: string;
@@ -169,70 +190,63 @@ export interface FieldProps {
 
 export function Field({ label, hint, error, warning, success, required, children, lockedBy }: FieldProps) {
   return (
-    <label style={{ display: 'block' }}>
-      <span
-        style={{
-          display: 'flex', alignItems: 'center', gap: 5,
-          fontSize: 12, fontWeight: 500, color: color.textSecondary, marginBottom: 5,
-        }}
-      >
+    <label className="block">
+      <span className="mb-1.5 flex items-center gap-1.5 text-xs font-medium text-foreground">
         {label}
-        {required && <span style={{ color: color.danger }}>*</span>}
+        {required && <span className="text-destructive">*</span>}
         {lockedBy && (
-          <span title={`Locked at ${lockedBy} scope`} style={{ color: color.textMuted }}>🔒</span>
+          <span title={`Locked at ${lockedBy} scope`} className="text-muted-foreground">🔒</span>
         )}
       </span>
       {children}
       {hint && !error && !warning && !success && (
-        <div style={{ fontSize: 11, color: color.textSecondary, marginTop: 4 }}>{hint}</div>
+        <div className="mt-1.5 text-[11px] text-muted-foreground">{hint}</div>
       )}
       {error && (
-        <div style={{ fontSize: 11, color: color.dangerText, marginTop: 4 }}>✕ {error}</div>
+        <div className="mt-1.5 text-[11px]" style={{ color: color.dangerText }}>✕ {error}</div>
       )}
       {warning && !error && (
-        <div style={{ fontSize: 11, color: color.warningText, marginTop: 4 }}>● {warning}</div>
+        <div className="mt-1.5 text-[11px]" style={{ color: color.warningText }}>● {warning}</div>
       )}
       {success && !error && !warning && (
-        <div style={{ fontSize: 11, color: color.successText, marginTop: 4 }}>✓ {success}</div>
+        <div className="mt-1.5 text-[11px]" style={{ color: color.successText }}>✓ {success}</div>
       )}
     </label>
   );
 }
 
 export function TextInput({
-  invalid, style, ...rest
+  invalid, className, ...rest
 }: React.InputHTMLAttributes<HTMLInputElement> & { invalid?: boolean }) {
   return (
     <input
       {...rest}
-      style={{
-        ...CONTROL_BASE,
-        borderColor: invalid ? color.danger : color.border,
-        ...(rest.disabled ? { background: color.neutralSoft, color: color.textMuted } : {}),
-        ...style,
-      }}
+      aria-invalid={invalid || undefined}
+      className={cn(
+        CONTROL, CONTROL_H,
+        invalid && 'border-destructive focus-visible:ring-destructive',
+        className,
+      )}
     />
   );
 }
 
 export function NumberInput({
-  invalid, style, ...rest
+  invalid, className, ...rest
 }: React.InputHTMLAttributes<HTMLInputElement> & { invalid?: boolean }) {
   return (
     <input
       {...rest}
       type="number"
-      style={{
-        ...CONTROL_BASE, ...tabular,
-        borderColor: invalid ? color.danger : color.border,
-        ...(rest.disabled ? { background: color.neutralSoft, color: color.textMuted } : {}),
-        ...style,
-      }}
+      aria-invalid={invalid || undefined}
+      className={cn(
+        CONTROL, CONTROL_H, TABULAR,
+        invalid && 'border-destructive focus-visible:ring-destructive',
+        className,
+      )}
     />
   );
 }
-
-const tabular: React.CSSProperties = { fontVariantNumeric: 'tabular-nums', fontFamily: font.mono };
 
 export interface CurrencyInputProps extends React.InputHTMLAttributes<HTMLInputElement> {
   currency?: string;
@@ -240,56 +254,45 @@ export interface CurrencyInputProps extends React.InputHTMLAttributes<HTMLInputE
 }
 
 export function CurrencyInput({
-  currency = currencySymbol(BASE_CURRENCY), invalid, style, ...rest
+  currency = currencySymbol(BASE_CURRENCY), invalid, className, ...rest
 }: CurrencyInputProps) {
   return (
     <div
-      style={{
-        display: 'flex', alignItems: 'center',
-        border: `1px solid ${invalid ? color.danger : color.border}`,
-        borderRadius: radius.control, background: '#fff', overflow: 'hidden',
-      }}
+      className={cn(
+        'flex h-8 items-center overflow-hidden rounded-md border border-input bg-background shadow-sm',
+        'focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-1',
+        invalid && 'border-destructive focus-within:ring-destructive',
+      )}
     >
-      <span
-        style={{
-          padding: '7px 9px', background: color.neutralSoft,
-          color: color.textSecondary, fontSize: 12, fontWeight: 600,
-          borderRight: `1px solid ${color.border}`,
-        }}
-      >
+      <span className="self-stretch border-r border-input bg-muted px-2.5 py-1.5 text-xs font-semibold text-muted-foreground">
         {currency}
       </span>
       <input
         {...rest}
-        style={{
-          ...CONTROL_BASE, ...tabular, border: 'none', textAlign: 'right', ...style,
-        }}
+        className={cn(
+          'h-full w-full border-0 bg-transparent px-2.5 text-right text-[13px] text-foreground',
+          'focus-visible:outline-none disabled:cursor-not-allowed disabled:text-muted-foreground',
+          TABULAR, className,
+        )}
       />
     </div>
   );
 }
 
 export function Select({
-  style, children, ...rest
+  className, children, ...rest
 }: React.SelectHTMLAttributes<HTMLSelectElement>) {
   return (
-    <div style={{ position: 'relative' }}>
+    <div className="relative">
       <select
         {...rest}
-        style={{
-          ...CONTROL_BASE, appearance: 'none', paddingRight: 28,
-          ...(rest.disabled ? { background: color.neutralSoft, color: color.textMuted } : {}),
-          ...style,
-        }}
+        className={cn(CONTROL, CONTROL_H, 'appearance-none pr-7', className)}
       >
         {children}
       </select>
       <span
         aria-hidden
-        style={{
-          position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)',
-          color: color.textSecondary, fontSize: 10, pointerEvents: 'none',
-        }}
+        className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-[10px] text-muted-foreground"
       >
         ▾
       </span>
@@ -297,18 +300,17 @@ export function Select({
   );
 }
 
-export function Textarea({ style, ...rest }: React.TextareaHTMLAttributes<HTMLTextAreaElement>) {
-  return <textarea {...rest} style={{ ...CONTROL_BASE, resize: 'vertical', ...style }} />;
+export function Textarea({ className, ...rest }: React.TextareaHTMLAttributes<HTMLTextAreaElement>) {
+  return <textarea {...rest} className={cn(CONTROL, 'min-h-16 resize-y py-2', className)} />;
 }
 
 export function ReadOnlyValue({ children, mono }: { children: React.ReactNode; mono?: boolean }) {
   return (
     <div
-      style={{
-        padding: '7px 10px', background: color.neutralSoft,
-        borderRadius: radius.control, fontSize: 13, color: color.textPrimary,
-        ...(mono ? tabular : {}),
-      }}
+      className={cn(
+        'rounded-md bg-muted px-2.5 py-1.5 text-[13px] text-foreground',
+        mono && TABULAR,
+      )}
     >
       {children}
     </div>
@@ -337,11 +339,12 @@ export interface ToggleProps {
   disabledReason?: string;
 }
 
+/** shadcn's Switch: a track that takes the ring, and a thumb that translates. */
 export function Toggle({
   checked, onChange, label, ariaLabel, disabled, disabledReason,
 }: ToggleProps) {
   return (
-    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+    <span className="inline-flex items-center gap-2">
       <button
         type="button"
         role="switch"
@@ -350,28 +353,27 @@ export function Toggle({
         title={disabledReason}
         disabled={disabled}
         onClick={() => !disabled && onChange(!checked)}
-        style={{
-          width: 38, height: 20, borderRadius: radius.pill, border: 'none',
-          background: disabled ? color.borderStrong : checked ? color.brandPrimary : color.borderStrong,
-          position: 'relative', cursor: disabled ? 'not-allowed' : 'pointer',
-          padding: 0, opacity: disabled ? 0.6 : 1, flexShrink: 0,
-        }}
+        className={cn(
+          'peer inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full border-2 border-transparent',
+          'transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+          'focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50',
+          checked && !disabled ? 'bg-primary' : 'bg-input',
+        )}
       >
         <span
-          style={{
-            position: 'absolute', top: 2, left: checked ? 20 : 2,
-            width: 16, height: 16, borderRadius: '50%', background: '#fff',
-            transition: 'left .14s ease', boxShadow: '0 1px 2px rgba(17,24,39,.2)',
-          }}
+          className={cn(
+            'pointer-events-none block size-4 rounded-full bg-background shadow-sm ring-0 transition-transform',
+            checked ? 'translate-x-4' : 'translate-x-0',
+          )}
         />
       </button>
       {label && (
-        <span style={{ fontSize: 13, color: disabled ? color.textMuted : color.textBody }}>
+        <span className={cn('text-[13px]', disabled ? 'text-muted-foreground' : 'text-foreground')}>
           {label}
         </span>
       )}
       {disabledReason && (
-        <span title={disabledReason} style={{ color: color.textMuted, fontSize: 12 }}>ⓘ</span>
+        <span title={disabledReason} className="text-xs text-muted-foreground">ⓘ</span>
       )}
     </span>
   );
@@ -384,14 +386,15 @@ export interface SegmentedProps<T extends string> {
   size?: 'small' | 'medium';
 }
 
+/** shadcn's Tabs list, used as a segmented control. */
 export function Segmented<T extends string>({ options, value, onChange, size = 'medium' }: SegmentedProps<T>) {
   return (
     <div
       role="tablist"
-      style={{
-        display: 'inline-flex', background: color.neutralSoft,
-        borderRadius: radius.control, padding: 2, gap: 2,
-      }}
+      className={cn(
+        'inline-flex max-w-full flex-wrap items-center justify-center gap-1 rounded-md bg-muted p-1 text-muted-foreground',
+        size === 'small' ? 'min-h-8' : 'min-h-9',
+      )}
     >
       {options.map((option) => {
         const active = option.value === value;
@@ -403,16 +406,13 @@ export function Segmented<T extends string>({ options, value, onChange, size = '
             title={option.title}
             disabled={option.disabled}
             onClick={() => onChange(option.value)}
-            style={{
-              border: 'none', borderRadius: 5,
-              padding: size === 'small' ? '3px 9px' : '5px 12px',
-              fontSize: size === 'small' ? 11 : 12, fontWeight: 600,
-              background: active ? '#fff' : 'transparent',
-              color: active ? color.textPrimary : color.textSecondary,
-              boxShadow: active ? '0 1px 2px rgba(17,24,39,.14)' : 'none',
-              cursor: option.disabled ? 'not-allowed' : 'pointer',
-              opacity: option.disabled ? 0.5 : 1,
-            }}
+            className={cn(
+              'inline-flex min-w-0 flex-auto items-center justify-center rounded-sm text-center font-semibold',
+              'transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+              'disabled:pointer-events-none disabled:opacity-50',
+              size === 'small' ? 'px-2.5 py-1 text-[11px]' : 'px-3 py-1 text-xs',
+              active ? 'bg-background text-foreground shadow-sm' : 'hover:text-foreground',
+            )}
           >
             {option.label}
           </button>
@@ -422,6 +422,7 @@ export function Segmented<T extends string>({ options, value, onChange, size = '
   );
 }
 
+/** shadcn's RadioGroup item, in its card form: the whole row is the target. */
 export function Radio({
   checked, onChange, label, hint, disabled,
 }: { checked: boolean; onChange: () => void; label: string; hint?: string; disabled?: boolean }) {
@@ -432,31 +433,26 @@ export function Radio({
       aria-checked={checked}
       disabled={disabled}
       onClick={onChange}
-      style={{
-        display: 'flex', alignItems: 'flex-start', gap: 9, width: '100%',
-        textAlign: 'left', background: checked ? '#F5F8FF' : '#fff',
-        border: `1px solid ${checked ? color.brandPrimary : color.border}`,
-        borderRadius: radius.control, padding: '10px 12px',
-        cursor: disabled ? 'not-allowed' : 'pointer', opacity: disabled ? 0.55 : 1,
-      }}
+      className={cn(
+        'flex w-full items-start gap-2.5 rounded-md border px-3 py-2.5 text-left transition-colors',
+        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1',
+        'disabled:pointer-events-none disabled:opacity-50',
+        checked ? 'border-primary bg-accent' : 'border-input bg-background hover:bg-accent/60',
+      )}
     >
       <span
         aria-hidden
-        style={{
-          width: 14, height: 14, borderRadius: '50%', marginTop: 2, flexShrink: 0,
-          border: `2px solid ${checked ? color.brandPrimary : color.borderStrong}`,
-          background: checked ? color.brandPrimary : '#fff',
-          boxShadow: checked ? 'inset 0 0 0 2px #fff' : 'none',
-        }}
+        className={cn(
+          'mt-0.5 flex size-3.5 shrink-0 items-center justify-center rounded-full border-2',
+          checked ? 'border-primary bg-primary ring-2 ring-inset ring-background' : 'border-input bg-background',
+        )}
       />
       <span>
-        <span style={{ display: 'block', fontSize: 13, fontWeight: 600, color: checked ? color.brandPrimary : color.textPrimary }}>
+        <span className={cn('block text-[13px] font-semibold', checked ? 'text-primary' : 'text-foreground')}>
           {label}
         </span>
         {hint && (
-          <span style={{ display: 'block', fontSize: 11.5, color: color.textSecondary, marginTop: 2 }}>
-            {hint}
-          </span>
+          <span className="mt-0.5 block text-[11.5px] text-muted-foreground">{hint}</span>
         )}
       </span>
     </button>
@@ -467,15 +463,26 @@ export function Checkbox({
   checked, onChange, label, disabled,
 }: { checked: boolean; onChange: (next: boolean) => void; label: string; disabled?: boolean }) {
   return (
-    <label style={{ display: 'inline-flex', alignItems: 'center', gap: 7, cursor: disabled ? 'not-allowed' : 'pointer' }}>
+    <label
+      className={cn(
+        'inline-flex items-center gap-2',
+        disabled ? 'cursor-not-allowed' : 'cursor-pointer',
+      )}
+    >
       <input
         type="checkbox"
         checked={checked}
         disabled={disabled}
         onChange={(e) => onChange(e.target.checked)}
-        style={{ width: 14, height: 14, accentColor: color.brandPrimary }}
+        className={cn(
+          'size-3.5 shrink-0 rounded-sm accent-primary',
+          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1',
+          disabled && 'cursor-not-allowed opacity-50',
+        )}
       />
-      <span style={{ fontSize: 13, color: disabled ? color.textMuted : color.textBody }}>{label}</span>
+      <span className={cn('text-[13px]', disabled ? 'text-muted-foreground' : 'text-foreground')}>
+        {label}
+      </span>
     </label>
   );
 }
@@ -487,11 +494,10 @@ export function Checkbox({
 export function Avatar({ initials, size = 26 }: { initials: string; size?: number }) {
   return (
     <span
+      className="inline-flex shrink-0 items-center justify-center rounded-full font-bold"
       style={{
-        width: size, height: size, borderRadius: '50%',
+        width: size, height: size, fontSize: size * 0.42,
         background: color.brandPrimarySoft, color: color.brandPrimary,
-        display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-        fontSize: size * 0.42, fontWeight: 700, flexShrink: 0,
       }}
     >
       {initials}
@@ -510,7 +516,10 @@ export function Money({ value, currency = BASE_CURRENCY, bold, tone }: {
   value: number; currency?: string; bold?: boolean; tone?: string;
 }) {
   return (
-    <span style={{ ...tabular, fontWeight: bold ? 700 : 400, color: tone ?? 'inherit' }}>
+    <span
+      className={cn(TABULAR, bold && 'font-bold')}
+      style={{ color: tone ?? 'inherit', fontFamily: font.mono }}
+    >
       {money(value, currency)}
     </span>
   );
@@ -520,10 +529,10 @@ export function SectionHeading({ children, hint, action }: {
   children: React.ReactNode; hint?: string; action?: React.ReactNode;
 }) {
   return (
-    <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12, marginBottom: 12 }}>
+    <div className="mb-3 flex items-baseline justify-between gap-3">
       <div>
-        <div style={{ ...type.sectionHeading, color: color.textPrimary }}>{children}</div>
-        {hint && <div style={{ fontSize: 12, color: color.textSecondary, marginTop: 2 }}>{hint}</div>}
+        <div className="text-foreground" style={{ ...type.sectionHeading }}>{children}</div>
+        {hint && <div className="mt-0.5 text-xs text-muted-foreground">{hint}</div>}
       </div>
       {action}
     </div>

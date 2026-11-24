@@ -29,6 +29,7 @@ import { JourneyPatternsPanel } from './JourneyPatternsPanel';
 import { QuestionnairePanel } from './QuestionnairePanel';
 import { useStore } from '../store/store';
 import { DOA_RULES, SCOPE_LINEAGE } from '../data/seed';
+import { categoriesBySuper } from '../data/procurementCategories';
 import type { AutonomyLevel, ConfigScopeType, DoARule } from '../domain/types';
 
 // ---------------------------------------------------------------------------
@@ -149,12 +150,74 @@ const MODULE_TITLES: Record<string, string> = {
   global: 'Tenant Defaults',
 };
 
+/**
+ * Which category is being configured.
+ *
+ * "Category scope" is not one scope — it is one per category, and they hold
+ * different libraries, weightings and defaults. This sits in the scope card
+ * rather than inside each pane because it changes what every pane below is
+ * reading and writing, and a buyer who missed it would be editing the wrong
+ * category's configuration without anything on the page disagreeing.
+ *
+ * Exported so it can be rendered on its own: the studio opens at tenant
+ * scope, where there is nothing to choose, so a first paint never reaches it.
+ */
+export function CategoryScopePicker({
+  value, onChange,
+}: { value: string; onChange: (next: string) => void }) {
+  return (
+    <div
+      style={{
+        display: 'flex', gap: 10, alignItems: 'flex-end', flexWrap: 'wrap',
+        marginTop: 12, paddingTop: 12, borderTop: `1px solid ${color.border}`,
+      }}
+    >
+      <div style={{ minWidth: 260 }}>
+        <Field label="Category" hint="Each category keeps its own library and defaults.">
+          <Select
+            value={value}
+            aria-label="Category being configured"
+            onChange={(e) => onChange(e.target.value)}
+          >
+            {categoriesBySuper().map((group) => (
+              <optgroup key={group.superCategory} label={group.superCategory}>
+                {group.items.map((item) => (
+                  <option key={item.id} value={item.id}>{item.id}</option>
+                ))}
+              </optgroup>
+            ))}
+          </Select>
+        </Field>
+      </div>
+      <div
+        style={{
+          fontSize: 11.5, color: color.textSecondary, lineHeight: 1.6,
+          paddingBottom: 7, maxWidth: 480,
+        }}
+      >
+        Anything authored here serves <strong>{value}</strong> and is offered on an event whose
+        basket holds lines in that category.
+      </div>
+    </div>
+  );
+}
+
 export function ConfigurationStudio() {
   const { state, dispatch } = useStore();
   const [area, setArea] = React.useState('p2p');
   const [module, setModule] = React.useState<string | null>(null);
   const [scope, setScope] = React.useState<ConfigScopeType>('TENANT');
   const [chainKey, setChainKey] = React.useState<string | null>(null);
+  /**
+   * Which category is being configured.
+   *
+   * "Category scope" is not one scope — it is one per category, and they hold
+   * different libraries. A studio that configured a single hard-wired category
+   * could describe the lineage but never exercise it: a template written for
+   * IT Software had nowhere to live, so the event that needed it could never
+   * be offered it.
+   */
+  const [categoryId, setCategoryId] = React.useState(SCOPE_LINEAGE.categoryId);
 
   const openArea = (next: string) => {
     setArea(next);
@@ -165,7 +228,7 @@ export function ConfigurationStudio() {
 
   const lineage = {
     tenantId: SCOPE_LINEAGE.tenantId,
-    categoryId: scope === 'TENANT' ? null : SCOPE_LINEAGE.categoryId,
+    categoryId: scope === 'TENANT' ? null : categoryId,
     templateId: scope === 'TENANT' || scope === 'CATEGORY' ? null : SCOPE_LINEAGE.templateId,
     eventId: scope === 'EVENT' ? SCOPE_LINEAGE.eventId : null,
   };
@@ -181,7 +244,7 @@ export function ConfigurationStudio() {
         key, scopeType: scope,
         scopeId:
           scope === 'TENANT' ? SCOPE_LINEAGE.tenantId
-          : scope === 'CATEGORY' ? SCOPE_LINEAGE.categoryId
+          : scope === 'CATEGORY' ? categoryId
           : scope === 'TEMPLATE' ? SCOPE_LINEAGE.templateId
           : SCOPE_LINEAGE.eventId,
         value, isLocked: false, setBy: state.currentUser.id, setAt: Date.now(),
@@ -326,7 +389,7 @@ export function ConfigurationStudio() {
                   <span style={{ display: 'block' }}>{SCOPE_LABELS[s]}</span>
                   <span style={{ display: 'block', fontSize: 10.5, color: color.textSecondary, marginTop: 2 }}>
                     {s === 'TENANT' ? 'tenant-udaan'
-                      : s === 'CATEGORY' ? SCOPE_LINEAGE.categoryId
+                      : s === 'CATEGORY' ? categoryId
                       : s === 'TEMPLATE' ? 'Full Ladder'
                       : 'RFQ-2026-0142'}
                   </span>
@@ -337,6 +400,9 @@ export function ConfigurationStudio() {
               </React.Fragment>
             ))}
           </div>
+          {scope !== 'TENANT' && (
+            <CategoryScopePicker value={categoryId} onChange={setCategoryId} />
+          )}
           <div style={{ fontSize: 11.5, color: color.textSecondary, marginTop: 12, lineHeight: 1.6 }}>
             You are editing at <strong>{SCOPE_LABELS[scope]}</strong> scope. Settings shown below display
             the effective value at this scope, where it came from, and whether it can be changed here.
@@ -481,7 +547,7 @@ function SettingControl({
   }
 
   const options: Record<string, string[]> = {
-    'evaluation.envelope_mode': ['SINGLE', 'TWO_ENVELOPE'],
+    'evaluation.envelope_mode': ['NONE', 'SINGLE', 'TWO_ENVELOPE'],
     'evaluation.commercial_unlock': ['AUTO', 'MANUAL', 'MANUAL_WITH_WITNESS'],
     'evaluation.technical_gate': ['NONE', 'MIN_SCORE', 'PASS_FAIL', 'BOTH'],
     'evaluation.consensus_mode': ['SINGLE', 'AVERAGE', 'MODERATED'],

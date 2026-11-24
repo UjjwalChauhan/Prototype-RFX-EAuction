@@ -19,7 +19,7 @@
 import React from 'react';
 import { color, money } from '../../design-system/tokens';
 import { Button, Chip, Segmented } from '../../design-system/components/primitives';
-import { Card, Empty } from '../../design-system/components/layout';
+import { Card, Empty, Table } from '../../design-system/components/layout';
 import { ValidationBanner } from '../../design-system/components/domain';
 import {
   biddersForEvent, lineItemsForEvent, lotsForEvent, responsesForEvent, stageEventsOf, useStore,
@@ -32,14 +32,19 @@ import {
 import { STAGE_LABELS } from '../../domain/journeyPatterns';
 import { directionLabel } from '../../domain/comparator';
 import { resolve } from '../../domain/config';
+import { scoreBreakdown, type SectionScore } from '../../domain/evaluation';
+import { isStageEvent } from '../../domain/stageEvents';
 import { COUNTERPARTY_NAMES, QUESTIONNAIRE, SCOPE_LINEAGE } from '../../data/seed';
+import type { Question, Questionnaire, Score } from '../../domain/types';
 
 type Sheet = 'TECHNICAL' | 'COMMERCIAL';
 
 export function ComparisonTab({
-  eventId, initialSheet = 'TECHNICAL',
+  eventId, initialSheet = 'TECHNICAL', askId,
 }: {
   eventId: string;
+  /** When set, only this ask is compared: its questions, its suppliers, its answers. */
+  askId?: string;
   /** Which sheet opens. Technical first, because that is the order of the work. */
   initialSheet?: Sheet;
 }) {
@@ -54,11 +59,12 @@ export function ComparisonTab({
   const rootId = event.parentEventId ?? eventId;
   const root = state.events.find((e) => e.id === rootId) ?? event;
   const asks = stageEventsOf(state, rootId);
-  const familyEvents = [root, ...asks];
+  const scoped = askId !== undefined ? asks.find((a) => a.id === askId) ?? null : null;
+  const familyEvents = scoped ? [scoped] : [root, ...asks];
   const familyIds = new Set(familyEvents.map((e) => e.id));
 
-  const bidders = biddersForEvent(state, rootId);
-  const responses = responsesForEvent(state, rootId);
+  const bidders = biddersForEvent(state, scoped?.id ?? rootId);
+  const responses = scoped ? responsesForEvent(state, scoped.id) : responsesForEvent(state, rootId);
   const lots = lotsForEvent(state, rootId);
   const lineItems = lineItemsForEvent(state, rootId);
 
@@ -125,6 +131,15 @@ export function ComparisonTab({
     [root, lots, lineItems, questionnaires, responses, bidders, state.scores, rootId],
   );
 
+  /**
+   * The technical result is the evaluator's to publish. An ask run through the
+   * employee portal shows the buyer nothing until they have — scores in flight
+   * are the evaluators' working, not a result. Earlier seeded events predate
+   * publication and keep showing their sheet.
+   */
+  const publishedResults = state.technicalResults.filter((r) => familyIds.has(r.eventId));
+  const awaitingPublication = familyEvents.some((e) => isStageEvent(e)) && publishedResults.length === 0;
+
   if (bidders.length === 0) {
     return (
       <Card padded={false}>
@@ -188,8 +203,40 @@ export function ComparisonTab({
         </div>
       </Card>
 
-      {sheet === 'TECHNICAL' ? (
-        <TechnicalSheet comparison={technical} gate={gate} minScore={minScore} masked={blindTechnical} />
+      {sheet === 'TECHNICAL' && awaitingPublication ? (
+        <Card padded={false}>
+          <Empty
+            icon="◔"
+            title="The technical result has not been published yet"
+            hint="The technical evaluator scores the responses in the employee portal and publishes the result when done. It appears here once published."
+          />
+        </Card>
+      ) : sheet === 'TECHNICAL' ? (
+        <>
+          {publishedResults.map((result) => {
+            const ask = familyEvents.find((e) => e.id === result.eventId);
+            const nameOf = (id: string) => COUNTERPARTY_NAMES[id] ?? id;
+            return (
+              <ValidationBanner
+                key={result.eventId}
+                tone="success"
+                title={`Technical result published${ask ? ` — ${ask.eventNumber}` : ''}`}
+              >
+                Published {new Date(result.publishedAt).toLocaleString()} by the technical evaluator.
+                {' '}Qualified: {result.qualified.length > 0 ? result.qualified.map(nameOf).join(', ') : 'none'}.
+                {result.disqualified.length > 0 && (
+                  <> Not qualified: {result.disqualified.map((d) => `${nameOf(d.counterpartyId)} (${d.reason})`).join('; ')}.</>
+                )}
+              </ValidationBanner>
+            );
+          })}
+          <SectionScores
+            questionnaires={questionnaires}
+            vendors={technical.vendors}
+            scores={state.scores}
+          />
+          <TechnicalSheet comparison={technical} gate={gate} minScore={minScore} masked={blindTechnical} />
+        </>
       ) : (
         <CommercialSheet
           comparison={commercial}
@@ -538,6 +585,119 @@ function TechnicalSheet({
         <SheetGrid vendors={vendors} rows={rows} />
       </Card>
     </div>
+  );
+}
+
+/**
+ * What each section earned, and what the whole questionnaire earned.
+ *
+ * Reported on the scale the questionnaire was written with, because that is
+ * the scale the evaluators were told to think in. The share column is what
+ * stops the two numbers being confused: a section can score 9 out of 10 and
+ * still barely move the total, and an evaluator who cannot see how much it
+ * counts will argue about the wrong row.
+ *
+ * Unscored sections read as a dash rather than zero. A section nobody has got
+ * to yet is not a section the supplier failed.
+ */
+function SectionScores({
+  questionnaires, vendors, scores,
+}: {
+  questionnaires: Questionnaire[];
+  vendors: { bidderId: string; name: string }[];
+  scores: Score[];
+}) {
+  // One questionnaire per card: an event asking at two points, or in two
+  // categories, has two sets of sections and merging them would invent a
+  // section structure that nothing was written against.
+  const withSections = questionnaires.filter(
+    (questionnaire) => (questionnaire.sections ?? []).length > 0
+      && questionnaire.questions.some(
+        (q: Question) => q.weight > 0 && q.scoringMethod !== 'NONE',
+      ),
+  );
+  if (withSections.length === 0 || vendors.length === 0) return null;
+
+  return (
+    <>
+      {withSections.map((questionnaire) => {
+        const scale = questionnaire.scoreScale ?? 100;
+        const breakdowns = vendors.map((vendor) => ({
+          vendor,
+          breakdown: scoreBreakdown({
+            bidderId: vendor.bidderId,
+            questions: questionnaire.questions,
+            sections: questionnaire.sections ?? [],
+            scores,
+            scale,
+          }),
+        }));
+        const rows = breakdowns[0].breakdown.sections;
+
+        return (
+          <Card
+            key={questionnaire.id}
+            padded={false}
+            title={`Score by section — ${questionnaire.name}`}
+            hint={`Out of ${scale}${questionnaire.category ? ` · ${questionnaire.category}` : ''}. A section's share is how much of the total it carries.`}
+          >
+            <Table
+              columns={[
+                {
+                  key: 'section', header: 'Section',
+                  render: (row: SectionScore) => (
+                    <span style={{ fontWeight: row.sectionId === null ? 400 : 500 }}>{row.name}</span>
+                  ),
+                },
+                {
+                  key: 'share', header: 'Share', numeric: true, width: '92px',
+                  render: (row: SectionScore) => (
+                    <span title={`${row.allocatedWeight} of ${row.declaredWeight} allocated`}>
+                      {row.sharePct.toFixed(1)}%
+                    </span>
+                  ),
+                },
+                ...breakdowns.map((entry) => ({
+                  key: entry.vendor.bidderId,
+                  header: entry.vendor.name,
+                  numeric: true,
+                  render: (row: SectionScore) => {
+                    const mine = entry.breakdown.sections.find((s) => s.sectionId === row.sectionId);
+                    return mine?.score === null || mine === undefined
+                      ? <span style={{ color: color.textMuted }}>—</span>
+                      : <strong>{mine.score.toFixed(1)}</strong>;
+                  },
+                })),
+              ]}
+              rows={rows}
+              rowKey={(row: SectionScore) => row.sectionId ?? 'ungrouped'}
+            />
+            <div
+              style={{
+                display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap',
+                padding: '10px 13px', borderTop: `1px solid ${color.border}`,
+                background: color.rowAlt,
+              }}
+            >
+              <strong style={{ fontSize: 12.5 }}>Overall — out of {scale}</strong>
+              {breakdowns.map((entry) => (
+                <span key={entry.vendor.bidderId} style={{ fontSize: 12.5 }}>
+                  {entry.vendor.name}{' '}
+                  <strong>
+                    {entry.breakdown.overall === null
+                      ? '—'
+                      : entry.breakdown.overall.toFixed(1)}
+                  </strong>
+                  <span style={{ color: color.textSecondary }}>
+                    {' '}({entry.breakdown.scored} of {entry.breakdown.total} scored)
+                  </span>
+                </span>
+              ))}
+            </div>
+          </Card>
+        );
+      })}
+    </>
   );
 }
 

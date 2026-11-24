@@ -34,6 +34,7 @@ function paint(): string {
       uses={uses}
       canAuthor
       onNew={() => {}}
+      onUpload={() => {}}
       onEdit={() => {}}
       onDuplicate={() => {}}
       onInspect={() => {}}
@@ -54,7 +55,12 @@ function rowFor(html: string, template: QuestionnaireTemplate): string {
   return row as string;
 }
 
-/** The opening tag of a row's delete button, where `disabled` would sit. */
+/**
+ * The opening tag of a row's delete button, where the `disabled` attribute
+ * would sit. Matched as `disabled=""` rather than as the bare word, because
+ * the button's shadcn class list carries `disabled:opacity-50` and a substring
+ * search for "disabled" matches that on every button in the product.
+ */
 function deleteTag(html: string, template: QuestionnaireTemplate): string {
   const row = rowFor(html, template);
   const at = row.indexOf(`aria-label="Delete ${template.name}"`);
@@ -84,7 +90,7 @@ describe('the library is honest about what has been used', () => {
 
 describe('deleting is offered only where it is allowed', () => {
   it('disables delete on a template an event was built from', () => {
-    expect(deleteTag(paint(), RFI)).toContain('disabled');
+    expect(deleteTag(paint(), RFI)).toContain('disabled=""');
   });
 
   it('explains on the button itself why it is disabled', () => {
@@ -93,7 +99,7 @@ describe('deleting is offered only where it is allowed', () => {
   });
 
   it('leaves delete live on a template nothing has been asked from', () => {
-    expect(deleteTag(paint(), UNUSED)).not.toContain('disabled');
+    expect(deleteTag(paint(), UNUSED)).not.toContain('disabled=""');
   });
 
   it('names the event in the reason, so the buyer knows where to look', () => {
@@ -115,6 +121,7 @@ describe('the delete is always on screen, whatever scope is being viewed', () =>
         uses={uses}
         canAuthor
         onNew={() => {}}
+      onUpload={() => {}}
         onEdit={() => {}}
         onDuplicate={() => {}}
         onInspect={() => {}}
@@ -132,12 +139,12 @@ describe('the delete is always on screen, whatever scope is being viewed', () =>
 
   it('disables it and names the scope to open instead of hiding it', () => {
     const tag = deleteTag(atOtherScope(), UNUSED);
-    expect(tag).toContain('disabled');
+    expect(tag).toContain('disabled=""');
     expect(tag).toContain('Tenant');
   });
 
   it('still offers it at the scope the template was authored at', () => {
-    expect(deleteTag(paint(), UNUSED)).not.toContain('disabled');
+    expect(deleteTag(paint(), UNUSED)).not.toContain('disabled=""');
   });
 
   it('prefers the usage reason over the scope one where both would apply', () => {

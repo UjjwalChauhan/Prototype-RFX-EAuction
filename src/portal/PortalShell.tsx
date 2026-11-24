@@ -12,6 +12,7 @@ import React from 'react';
 import { color, radius } from '../design-system/tokens';
 import { portal, portalRadius } from './portalTheme';
 import { PortalNav, type PortalRoute } from './PortalNav';
+import { PortalFromBuyer, waitingOnSupplier } from './PortalFromBuyer';
 import { Button } from '../design-system/components/primitives';
 import { auctionsForBidder, useStore } from '../store/store';
 import { COUNTERPARTIES } from '../data/seed';
@@ -61,10 +62,6 @@ const NOT_BUILT: Partial<Record<PortalRoute, { heading: string; blurb: string }>
   settlements: {
     heading: 'Settlements',
     blurb: 'Payments made and payments due, with the invoices each settlement covers.',
-  },
-  notifications: {
-    heading: 'Notifications',
-    blurb: 'Everything this buyer has told you \u2014 invitations, clarifications, deadline changes and outcomes.',
   },
 };
 
@@ -136,6 +133,7 @@ export function PortalShell({ standalone = false }: { standalone?: boolean } = {
     offers: counts.auctions,
     bidding: callingMe.length,
     orders: liveForMe.length,
+    notifications: waitingOnSupplier(state, counterpartyId),
   };
 
   /** Every supplier this sign-in can act for, as the switcher column. */
@@ -182,6 +180,7 @@ export function PortalShell({ standalone = false }: { standalone?: boolean } = {
                 counterparty={counterparty}
                 sections={sections}
                 onNavigate={setRoute}
+                buyerWaiting={waitingOnSupplier(state, counterpartyId)}
               />
             )}
             {route === 'requests' && (
@@ -207,6 +206,7 @@ export function PortalShell({ standalone = false }: { standalone?: boolean } = {
               <BiddingConsole counterpartyId={counterpartyId} eventId={auctionEventId} />
             )}
             {(route === 'orders' || route === 'outcome') && <PortalOutcome />}
+            {route === 'notifications' && <PortalFromBuyer counterpartyId={counterpartyId} />}
             {route === 'profile' && <CompanyProfile counterpartyId={counterpartyId} />}
             {route === 'settings' && (
               <PortalSettings
@@ -248,8 +248,10 @@ export function PortalShell({ standalone = false }: { standalone?: boolean } = {
  * show if you opened it.
  */
 function PortalHome({
-  counterparty, sections, onNavigate,
+  counterparty, sections, onNavigate, buyerWaiting = 0,
 }: {
+  /** Questions the buyer has put to this supplier that are still unanswered. */
+  buyerWaiting?: number;
   counterparty: { name: string; contactEmail: string; categoriesServed: string[]; locationsServed: string[] } | undefined;
   sections: VendorSection[];
   onNavigate: (route: PortalRoute) => void;
@@ -296,6 +298,21 @@ function PortalHome({
       >
         Welcome Back
       </h1>
+
+      {buyerWaiting > 0 && (
+        <button
+          type="button"
+          onClick={() => onNavigate('notifications')}
+          style={{
+            marginTop: 22, textAlign: 'left', cursor: 'pointer', fontSize: 15.5, lineHeight: 1.5,
+            border: '1px solid #FCD34D', background: '#FFFBEB', color: '#78350F',
+            borderRadius: portalRadius.card, padding: '14px 18px',
+          }}
+        >
+          <strong>The buyer has {buyerWaiting === 1 ? 'a question' : `${buyerWaiting} questions`} for you.</strong>{' '}
+          A short reply keeps your offer in the running. Open “From the buyer”.
+        </button>
+      )}
 
       {counterparty && (
         <div style={{ marginTop: 34 }}>

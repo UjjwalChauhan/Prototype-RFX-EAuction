@@ -17,7 +17,7 @@ function question(overrides: Partial<Question> = {}): Question {
     id: 'q1', questionnaireId: 'qn1', sectionId: null, sequence: 1, code: 'Q1',
     type: 'number', title: 'Question', helpText: '', isRequired: true,
     envelope: 'TECHNICAL', weight: 10, scoringMethod: 'MANUAL', maxScore: 10,
-    rubric: null, isKnockout: false, allowAttachment: false,
+    rubric: null, isKnockout: false, allowAttachment: false, askedPer: 'VENDOR',
     ...overrides,
   };
 }

@@ -10,11 +10,12 @@ import { color, radius } from '../design-system/tokens';
 import { Avatar, Button, Chip } from '../design-system/components/primitives';
 import { Icon, type AdminIconName } from './AdminIcons';
 import { ValidationBanner } from '../design-system/components/domain';
-import { useStore } from '../store/store';
+import { resetPersistedState, useStore } from '../store/store';
 import { USERS } from '../data/seed';
 
 export type Route =
   | { name: 'board' }
+  | { name: 'rfxHome' }
   | { name: 'requests' }
   | { name: 'intake' }
   | { name: 'create'; prdId?: string }
@@ -89,6 +90,9 @@ const NAV: NavEntry[] = [
     { label: 'Purchase Request', route: { name: 'requests' } },
     { label: 'Sourcing Board', route: { name: 'board' } },
     { label: 'RFX', children: [
+      // The family's own front door. It sits above the three filtered views
+      // because a buyer opening RFX wants their day, not a list of RFIs.
+      { label: 'RFX Home', route: { name: 'rfxHome' } },
       { label: 'Request for Information', route: { name: 'list', stage: 'RFI' } },
       { label: 'Request for Proposal', route: { name: 'list', stage: 'RFP' } },
       { label: 'Request for Quotation', route: { name: 'list', stage: 'RFQ' } },
@@ -124,6 +128,7 @@ const NAV: NavEntry[] = [
  */
 function groupsFor(route: Route): string[] {
   const WRITTEN = ['RFI', 'RFP', 'RFQ'];
+  if (route.name === 'rfxHome') return ['Procurement', 'RFX'];
   if (route.name === 'list' && WRITTEN.includes(route.stage)) return ['Procurement', 'RFX'];
   return ['board', 'requests', 'intake', 'create', 'event', 'list'].includes(route.name)
     ? ['Procurement']
@@ -146,6 +151,23 @@ export function AdminShell({
   const { state, dispatch } = useStore();
   const [collapsed, setCollapsed] = React.useState(false);
   const [userMenuOpen, setUserMenuOpen] = React.useState(false);
+  /**
+   * The page head is sticky and its height varies with the breadcrumb and
+   * subtitle, so a screen that wants to stick something under it cannot
+   * hard-code the offset. Publish the measured height instead, and let them
+   * read `top: var(--rfx-head-h)`.
+   */
+  const headRef = React.useRef<HTMLElement | null>(null);
+  React.useEffect(() => {
+    const head = headRef.current;
+    if (!head || typeof ResizeObserver === 'undefined') return;
+    const publish = () =>
+      document.documentElement.style.setProperty('--rfx-head-h', `${head.offsetHeight}px`);
+    publish();
+    const observer = new ResizeObserver(publish);
+    observer.observe(head);
+    return () => observer.disconnect();
+  }, []);
   /**
    * Which groups are expanded. Seeded from the route so that landing on an
    * auction with a link opens Procurement around it rather than leaving the
@@ -308,6 +330,10 @@ export function AdminShell({
                     ['gear', 'Configuration Studio', () => onNavigate({ name: 'config' })],
                     ['search', 'Search', undefined],
                     ['logout', 'Open the vendor portal', () => dispatch({ type: 'SET_SURFACE', surface: 'PORTAL' })],
+                    ['users', 'Open the employee portal', () => dispatch({ type: 'SET_SURFACE', surface: 'EMPLOYEE' })],
+                    ['archive', 'Reset demo data — forget every event, approval and score created in this browser', () => {
+                      if (window.confirm('Reset the demo? Every event, RFI, RFP, RFQ, approval and score created in this browser is removed, in every open tab.')) resetPersistedState();
+                    }],
                   ] as const).map(
                     ([name, title, run]) => (
                       <button
@@ -467,6 +493,7 @@ export function AdminShell({
               under it. Deliberately quieter than the old 22px heading — the
               screen's own content is what should carry the weight. */}
           <header
+            ref={headRef}
             style={{
               background: color.surface, borderBottom: `1px solid ${color.border}`,
               padding: '12px 24px', minHeight: 56,
@@ -543,6 +570,9 @@ export function AdminShell({
                         </Button>
                         <Button size="small" variant="secondary" onClick={() => dispatch({ type: 'SET_SURFACE', surface: 'PORTAL' })}>
                           Open vendor portal →
+                        </Button>
+                        <Button size="small" variant="secondary" onClick={() => dispatch({ type: 'SET_SURFACE', surface: 'EMPLOYEE' })}>
+                          Open employee portal →
                         </Button>
                       </div>
                     </div>

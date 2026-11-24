@@ -23,13 +23,23 @@
  */
 import React from 'react';
 import {
-  allBids, auctionSyncRows, participationRows, rehearsalActivityRows, useStore,
+  allBids, auctionSyncRows, participationRows, rehearsalActivityRows, reviewSignalRows, useStore,
   type AuctionSyncRow, type ParticipationRow, type RehearsalActivityRow,
 } from './store';
 import type {
   Bid, EventBidder, LineItem, Lot, Questionnaire, Response, SourcingEvent,
 } from '../domain/types';
 import type { TermsDocument } from '../domain/terms';
+import type { BuyerReply, BuyerRequest, ReviewSignal } from '../domain/buyerRequests';
+
+/** Tell the seam a sourcing event is deleted, so no tab publishes it back. */
+export function announceDeletion(eventId: string): Promise<unknown> {
+  return fetch(`${SYNC_URL}/admin`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-sync-client': CLIENT_ID },
+    body: JSON.stringify({ removeEvents: [eventId] }),
+  }).catch(() => undefined);
+}
 
 export type SyncRole = 'admin' | 'vendor';
 
@@ -73,6 +83,8 @@ interface ServerState {
    * blanks a portal that was showing perfectly good data a moment earlier.
    */
   present?: { admin: boolean; vendor: boolean };
+  /** Sourcing events that have been deleted. Every tab removes them. */
+  removed?: string[];
   events: SourcingEvent[];
   lots: Lot[];
   lineItems: LineItem[];
@@ -84,6 +96,9 @@ interface ServerState {
   bids: Bid[];
   participation: ParticipationRow[];
   rehearsalActivity: RehearsalActivityRow[];
+  buyerRequests: BuyerRequest[];
+  reviewSignals: ReviewSignal[];
+  buyerReplies: BuyerReply[];
 }
 
 /**
@@ -115,6 +130,10 @@ export function useSync(role: SyncRole): SyncStatus {
         // roster and lot details are not sent: they are already on the wire as
         // `bidders` and `lots`.
         auctions: auctionSyncRows(state),
+        // Questions put to a supplier during commercial evaluation, and where their own price
+        // check stands. Plain stages only: no rank, figure or adjustment ever crosses.
+        buyerRequests: state.buyerRequests,
+        reviewSignals: reviewSignalRows(state),
       }
     : {
       responses: state.responses,
@@ -128,6 +147,8 @@ export function useSync(role: SyncRole): SyncStatus {
       // only — a practice price never crosses this seam, because a rehearsal
       // the buyer can read the figures of is not a rehearsal.
       rehearsalActivity: rehearsalActivityRows(state),
+      // The supplier's answers to what the buyer asked.
+      buyerReplies: state.buyerReplies,
     };
 
   const serialised = JSON.stringify(owned);
@@ -206,6 +227,11 @@ export function useSync(role: SyncRole): SyncStatus {
           setResendNonce((n) => n + 1);
           return;
         }
+        // A deleted event goes from this tab as well, whichever tab deleted it.
+        if (role === 'admin') {
+          for (const id of next.removed ?? []) dispatch({ type: 'DELETE_SOURCING_EVENT', eventId: id });
+        }
+
         // A version we have already applied carries nothing new.
         if (next.version === lastVersion.current) return;
 
@@ -226,6 +252,8 @@ export function useSync(role: SyncRole): SyncStatus {
                 bidders: next.bidders,
                 questionnaires: next.questionnaires,
                 auctions: next.auctions,
+                buyerRequests: next.buyerRequests,
+                reviewSignals: next.reviewSignals,
               }
             : {
                 type: 'SYNC_IN',
@@ -233,6 +261,7 @@ export function useSync(role: SyncRole): SyncStatus {
                 bids: next.bids,
                 participation: next.participation,
                 rehearsalActivity: next.rehearsalActivity,
+                buyerReplies: next.buyerReplies,
               },
         );
       } catch {
